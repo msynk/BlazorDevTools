@@ -1,0 +1,125 @@
+using BlazorDevTools.Session;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.JSInterop;
+
+namespace BlazorDevTools.Tests;
+
+internal static class TestHelpers
+{
+    /// <summary>Creates an enabled DevTools session backed by a fresh DI scope (no renderer).</summary>
+    public static (DevToolsSession Session, IServiceScope Scope) CreateSession(Action<DevToolsOptions>? configure = null, Action<IServiceCollection>? services = null)
+    {
+        var collection = new ServiceCollection();
+        services?.Invoke(collection);
+        collection.AddBlazorDevTools(o =>
+        {
+            o.Enabled = true;
+            configure?.Invoke(o);
+        });
+        var provider = collection.BuildServiceProvider();
+        var scope = provider.CreateScope();
+        var session = scope.ServiceProvider.GetRequiredService<DevToolsSession>();
+        session.EnsureActivated();
+        return (session, scope);
+    }
+}
+
+public class ParentComponent : ComponentBase
+{
+    [Parameter] public bool ShowChild { get; set; } = true;
+
+    [Parameter] public int Value { get; set; }
+
+    public int RenderCalls { get; private set; }
+
+    private int _counter;
+
+    public void Increment()
+    {
+        _counter++;
+        StateHasChanged();
+    }
+
+    public void Refresh() => StateHasChanged();
+
+    protected override void BuildRenderTree(RenderTreeBuilder builder)
+    {
+        RenderCalls++;
+        builder.OpenElement(0, "div");
+        builder.AddContent(1, "value:" + Value + " counter:" + _counter);
+        if (ShowChild)
+        {
+            builder.OpenComponent<ChildComponent>(2);
+            builder.AddComponentParameter(3, nameof(ChildComponent.Text), "child-" + Value + "-" + _counter);
+            builder.CloseComponent();
+        }
+
+        builder.CloseElement();
+    }
+}
+
+public class ChildComponent : ComponentBase
+{
+    [Parameter] public string? Text { get; set; }
+
+    [Inject] public IJSRuntime? JS { get; set; }
+
+    private readonly List<string> _history = [];
+
+    protected override void OnParametersSet() => _history.Add(Text ?? "");
+
+    protected override void BuildRenderTree(RenderTreeBuilder builder)
+    {
+        builder.OpenElement(0, "span");
+        builder.AddContent(1, Text);
+        builder.CloseElement();
+    }
+}
+
+public class ThrowingComponent : ComponentBase
+{
+    [Parameter] public bool Throw { get; set; }
+
+    protected override void BuildRenderTree(RenderTreeBuilder builder)
+    {
+        if (Throw)
+        {
+            throw new InvalidOperationException("boom");
+        }
+
+        builder.AddContent(0, "fine");
+    }
+}
+
+public sealed class FakeJSRuntime : IJSRuntime
+{
+    public List<string> Calls { get; } = [];
+
+    public Func<string, object?[]?, object?> Handler { get; set; } = (_, _) => null;
+
+    public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) => InvokeAsync<TValue>(identifier, CancellationToken.None, args);
+
+    public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args)
+    {
+        Calls.Add(identifier);
+        var result = Handler(identifier, args);
+        return ValueTask.FromResult((TValue)result!);
+    }
+}
+
+public sealed class FakeJSObjectReference : IJSObjectReference
+{
+    public List<string> Calls { get; } = [];
+
+    public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) => InvokeAsync<TValue>(identifier, CancellationToken.None, args);
+
+    public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args)
+    {
+        Calls.Add(identifier);
+        return ValueTask.FromResult(default(TValue)!);
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}

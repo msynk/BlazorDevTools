@@ -1,0 +1,142 @@
+using BlazorDevTools.Extensions;
+
+namespace BlazorDevTools;
+
+/// <summary>Where the DevTools panel is docked.</summary>
+public enum DevToolsDock
+{
+    Bottom,
+    Right,
+}
+
+public enum DevToolsTheme
+{
+    Auto,
+    Dark,
+    Light,
+}
+
+/// <summary>Thresholds used by the built-in diagnostics rules. All are evidence-based; raise them for noisy apps.</summary>
+public sealed class DiagnosticsOptions
+{
+    /// <summary>Renders of a single component within <see cref="RenderStormWindowMs"/> that count as a render storm.</summary>
+    public int RenderStormCount { get; set; } = 30;
+
+    public int RenderStormWindowMs { get; set; } = 2000;
+
+    /// <summary>Number of components rendered in one batch that counts as a render cascade.</summary>
+    public int RenderCascadeSize { get; set; } = 25;
+
+    /// <summary>Single render (BuildRenderTree) duration considered slow, in milliseconds.</summary>
+    public double SlowRenderMs { get; set; } = 16;
+
+    /// <summary>Identical HTTP requests (method + URL) within <see cref="DuplicateHttpWindowMs"/> that count as duplicates.</summary>
+    public int DuplicateHttpCount { get; set; } = 4;
+
+    public int DuplicateHttpWindowMs { get; set; } = 1000;
+
+    public double SlowHttpMs { get; set; } = 2000;
+
+    public double SlowJsInteropMs { get; set; } = 250;
+
+    /// <summary>JS interop calls to the same identifier within one second that count as excessive.</summary>
+    public int ExcessiveJsInteropCount { get; set; } = 50;
+
+    /// <summary>Event handler duration considered slow (it blocks the renderer), in milliseconds.</summary>
+    public double SlowEventHandlerMs { get; set; } = 100;
+
+    /// <summary>Occurrences of the same error that count as a repeated error.</summary>
+    public int RepeatedErrorCount { get; set; } = 3;
+
+    /// <summary>Rule ids that are disabled.</summary>
+    public HashSet<string> DisabledRules { get; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class DevToolsUiOptions
+{
+    public bool OpenByDefault { get; set; }
+
+    public DevToolsDock Dock { get; set; } = DevToolsDock.Bottom;
+
+    public DevToolsTheme Theme { get; set; } = DevToolsTheme.Auto;
+
+    /// <summary>How often the UI checks for new activity while open, in milliseconds. The UI never re-renders without changes.</summary>
+    public int RefreshIntervalMs { get; set; } = 250;
+
+    /// <summary>Keyboard shortcut that toggles the panel. Format: modifiers + key, e.g. "Ctrl+Shift+D".</summary>
+    public string ToggleShortcut { get; set; } = "Ctrl+Shift+D";
+
+    /// <summary>Show a small floating badge when the panel is closed.</summary>
+    public bool ShowBadge { get; set; } = true;
+}
+
+/// <summary>Configuration for <c>AddBlazorDevTools</c>.</summary>
+public sealed class DevToolsOptions
+{
+    /// <summary>
+    /// Explicitly enables or disables DevTools. When null (default) DevTools is enabled only when the host environment
+    /// reports Development (<c>IHostEnvironment</c> on the server, <c>IWebAssemblyHostEnvironment</c> in the browser).
+    /// </summary>
+    public bool? Enabled { get; set; }
+
+    /// <summary>Maximum number of timeline events kept in memory per session (circuit).</summary>
+    public int MaxEvents { get; set; } = 5000;
+
+    /// <summary>Maximum render samples kept per component instance.</summary>
+    public int MaxRendersPerComponent { get; set; } = 100;
+
+    public int MaxErrors { get; set; } = 300;
+
+    public int MaxHttpRequests { get; set; } = 500;
+
+    public int MaxJsInteropCalls { get; set; } = 1000;
+
+    public int MaxStateChangesPerProvider { get; set; } = 100;
+
+    /// <summary>Attribute renders to UI events, parent renders and navigation using <c>Activity</c> and render-batch analysis.</summary>
+    public bool TrackRenderCauses { get; set; } = true;
+
+    /// <summary>Track HTTP requests made through <c>IHttpClientFactory</c> clients.</summary>
+    public bool TrackHttp { get; set; } = true;
+
+    /// <summary>Capture request/response header names and values (sensitive headers are always redacted). Bodies are never captured.</summary>
+    public bool CaptureHttpHeaders { get; set; } = true;
+
+    /// <summary>Wrap <c>IJSRuntime</c> instances injected into components to attribute JS interop calls to components.</summary>
+    public bool TrackJsInterop { get; set; } = true;
+
+    /// <summary>Install the browser bridge (JS errors, online/offline, reconnect state, storage inspection, keyboard shortcut).</summary>
+    public bool EnableBrowserBridge { get; set; } = true;
+
+    /// <summary>
+    /// Snapshot component fields on every render for every component and diff them. Off by default because it costs
+    /// reflection per render; the inspector always does this for the currently selected component only.
+    /// </summary>
+    public bool CaptureComponentStateOnRender { get; set; }
+
+    public int MaxInspectionDepth { get; set; } = 8;
+
+    public int MaxCollectionItems { get; set; } = 100;
+
+    public int MaxStringLength { get; set; } = 500;
+
+    /// <summary>Member/header/query names matching any of these (case-insensitive substring) are redacted.</summary>
+    public List<string> SensitiveNamePatterns { get; } =
+    [
+        "password", "passwd", "pwd", "secret", "token", "apikey", "api_key", "api-key", "authorization", "cookie",
+        "connectionstring", "credential", "ssn", "creditcard", "cardnumber", "cvv", "privatekey", "clientsecret", "bearer",
+    ];
+
+    /// <summary>Namespace prefixes whose components are hidden from the component tree.</summary>
+    public List<string> HiddenComponentNamespaces { get; } = ["BlazorDevTools.UI", "BlazorDevTools.Server.UI", "Microsoft.AspNetCore.Components"];
+
+    /// <summary>Additional per-type predicates to exclude components from tracking entirely.</summary>
+    public List<Func<Type, bool>> IgnoreComponentPredicates { get; } = [];
+
+    public DiagnosticsOptions Diagnostics { get; } = new();
+
+    public DevToolsUiOptions Ui { get; } = new();
+
+    /// <summary>Extensions contributed by libraries or the application.</summary>
+    public List<IDevToolsExtension> Extensions { get; } = [];
+}

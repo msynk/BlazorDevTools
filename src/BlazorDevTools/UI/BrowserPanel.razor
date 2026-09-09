@@ -1,0 +1,73 @@
+@namespace BlazorDevTools.UI
+
+<div class="bdt-scroll" style="flex:1">
+    @{ var b = Session.Browser; }
+    @if (!b.BridgeAttached)
+    {
+        <div class="bdt-empty">Browser bridge not attached@(b.BridgeError is null ? "" : ": " + b.BridgeError). Enable <code>EnableBrowserBridge</code> and make sure <code>_content/BlazorDevTools/devtools.js</code> is served.</div>
+    }
+    else
+    {
+        <div class="bdt-stat-grid">
+            <div class="bdt-stat"><div class="bdt-stat-value">@(b.Online switch { true => "online", false => "offline", _ => "?" })</div><div class="bdt-stat-label">connectivity</div></div>
+            <div class="bdt-stat"><div class="bdt-stat-value">@(b.Visibility ?? "?")</div><div class="bdt-stat-label">page visibility</div></div>
+            <div class="bdt-stat"><div class="bdt-stat-value">@(b.ReconnectState ?? "–")</div><div class="bdt-stat-label">reconnect state · @b.ReconnectCount reconnects</div></div>
+            <div class="bdt-stat"><div class="bdt-stat-value">@(b.JsHeapUsedMb is { } h ? Fmt.Num(h) + " MB" : "n/a")</div><div class="bdt-stat-label">JS heap used @(b.JsHeapLimitMb is { } l ? "of " + Fmt.Num(l) + " MB" : "(Chromium only)")</div></div>
+            <div class="bdt-stat"><div class="bdt-stat-value">@(b.NavigationLoadMs is { } n ? Fmt.Ms(n) : "n/a")</div><div class="bdt-stat-label">page load (DOMContentLoaded @(b.DomContentLoadedMs is { } d ? Fmt.Ms(d) : "n/a"))</div></div>
+            <div class="bdt-stat"><div class="bdt-stat-value">@(b.ResourceCount?.ToString() ?? "n/a")</div><div class="bdt-stat-label">resources loaded</div></div>
+            <div class="bdt-stat"><div class="bdt-stat-value">@b.JsErrorCount</div><div class="bdt-stat-label">JS errors</div></div>
+            <div class="bdt-stat"><div class="bdt-stat-value">@b.JsToDotNetCalls</div><div class="bdt-stat-label">JS → .NET calls</div></div>
+        </div>
+        <div class="bdt-section">
+            <div class="bdt-section-title">Storage <button type="button" style="margin-left:auto;font-weight:normal" @onclick="Host.LoadStorageAsync">@(b.StorageReadAt is null ? "Read localStorage / sessionStorage" : "Refresh (" + Fmt.Ago(b.StorageReadAt) + ")")</button></div>
+            <div class="bdt-section-body">
+                @if (b.LocalStorage is null)
+                {
+                    <div class="bdt-muted">Storage is read only on request. Values whose key looks sensitive are redacted; previews are truncated.</div>
+                }
+                else
+                {
+                    <strong>localStorage (@b.LocalStorage.Count)</strong>
+                    @StorageTable(b.LocalStorage)
+                    <strong>sessionStorage (@(b.SessionStorage?.Count ?? 0))</strong>
+                    @StorageTable(b.SessionStorage ?? [])
+                }
+            </div>
+        </div>
+        <div class="bdt-section">
+            <div class="bdt-section-title">Environment</div>
+            <div class="bdt-section-body">
+                <dl class="bdt-kv">
+                    <dt>User agent</dt><dd class="bdt-mono">@b.UserAgent</dd>
+                    <dt>Renderer</dt><dd>@Session.Platform @(Session.RenderModeName is null ? "" : "· " + Session.RenderModeName)</dd>
+                    <dt>Untracked .NET→JS</dt><dd>@b.UntrackedDotNetToJsCalls</dd>
+                </dl>
+                <div class="bdt-muted">Everything else (network waterfall, DOM, WebSocket frames) stays in the browser's own DevTools; this panel only adds Blazor-relevant context.</div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    private DevToolsSession Session => Host.Session;
+
+    private RenderFragment StorageTable(IReadOnlyList<StorageEntry> entries) => __builder =>
+    {
+        if (entries.Count == 0)
+        {
+            <div class="bdt-muted">empty</div>
+            return;
+        }
+        <table>
+            <thead><tr><th>Key</th><th class="bdt-num">Size</th><th>Preview</th></tr></thead>
+            <tbody>
+                @foreach (var e in entries)
+                {
+                    <tr><td class="bdt-mono">@e.Key</td><td class="bdt-num">@e.Size</td><td class="bdt-mono bdt-truncate" style="max-width:480px">@(Session.Redactor.IsSensitiveName(e.Key) ? Redactor.RedactedValue : e.Preview)</td></tr>
+                }
+            </tbody>
+        </table>
+    };
+}

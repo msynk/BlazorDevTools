@@ -1,0 +1,65 @@
+@namespace BlazorDevTools.UI
+@using BlazorDevTools.Capabilities
+
+<div class="bdt-scroll" style="flex:1">
+    @{ var o = Session.Overhead; }
+    <div class="bdt-stat-grid">
+        <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Ms(o.TotalMs)</div><div class="bdt-stat-label">total DevTools CPU time in @Fmt.Num(o.UptimeSeconds) s</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Num(o.InstrumentationPerRenderMicroseconds) µs</div><div class="bdt-stat-label">bookkeeping per app render (@o.AppRenderCount renders, @Fmt.Ms(o.InstrumentationMs) total)</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Ms(o.DevToolsRenderMs)</div><div class="bdt-stat-label">DevTools UI rendering (@o.DevToolsRenderCount renders)</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Ms(o.InspectionMs)</div><div class="bdt-stat-label">object inspection & state diffs</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Ms(o.DiagnosticsMs)</div><div class="bdt-stat-label">diagnostics rules</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Ms(o.TreeRefreshMs)</div><div class="bdt-stat-label">tree refresh</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Session.Timeline.Count / @Session.Options.MaxEvents</div><div class="bdt-stat-label">events buffered</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Session.Components.TrackedCount</div><div class="bdt-stat-label">live component instances</div></div>
+    </div>
+    <div class="bdt-section">
+        <div class="bdt-section-title">Session</div>
+        <div class="bdt-section-body">
+            <dl class="bdt-kv">
+                <dt>Platform</dt><dd>@(Session.Platform ?? "unknown") @(Session.IsInteractive ? "(interactive)" : "(static)") @(Session.RenderModeName is null ? "" : "· render mode " + Session.RenderModeName)</dd>
+                <dt>Session</dt><dd>#@Session.Id started @Fmt.Time(Session.StartedAt) · @Instrumentation.SessionResolver.LiveSessionCount live session(s) in this process</dd>
+                <dt>Framework</dt><dd class="bdt-mono">@typeof(Microsoft.AspNetCore.Components.ComponentBase).Assembly.GetName().Version · @System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription</dd>
+                <dt>Extensions</dt><dd>@(Session.Registry.ExtensionNames.Count == 0 ? "none" : string.Join(", ", Session.Registry.ExtensionNames)) @foreach (var e in Session.Registry.ExtensionErrors) { <span class="bdt-chip bdt-err">@e</span> }</dd>
+                <dt>Shortcut</dt><dd>@Session.Options.Ui.ToggleShortcut toggles the panel · Ctrl+K opens search/commands</dd>
+            </dl>
+            <button type="button" @onclick="() => Session.ClearAll()">Clear all captured data</button>
+        </div>
+    </div>
+    <div class="bdt-section">
+        <div class="bdt-section-title">Capabilities <span class="bdt-muted" style="font-weight:normal">what this session can and cannot observe, and why</span></div>
+        <div class="bdt-section-body">
+            <table>
+                <thead><tr><th>Area</th><th>Information</th><th>Status</th><th>Explanation</th></tr></thead>
+                <tbody>
+                    @foreach (var c in Session.Capabilities)
+                    {
+                        <tr>
+                            <td>@c.Area</td>
+                            <td>@c.Name</td>
+                            <td class="bdt-nowrap bdt-cap-@c.Status.ToString().ToLowerInvariant()">@Label(c.Status)</td>
+                            <td class="bdt-muted">@c.Explanation</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    private DevToolsSession Session => Host.Session;
+
+    private static string Label(CapabilityStatus status) => status switch
+    {
+        CapabilityStatus.Available => "Available",
+        CapabilityStatus.Partial => "Partially available",
+        CapabilityStatus.RequiresInstrumentation => "Requires instrumentation",
+        CapabilityStatus.RequiresIntegration => "Requires app integration",
+        CapabilityStatus.RequiresRuntimeSupport => "Requires runtime support",
+        CapabilityStatus.NotReliable => "Not technically reliable",
+        _ => "Not available",
+    };
+}

@@ -1,0 +1,170 @@
+@namespace BlazorDevTools.UI
+@using Microsoft.Extensions.DependencyInjection
+
+<div class="bdt-split">
+    <div class="bdt-left" style="flex-basis:50%">
+        <div class="bdt-toolbar">
+            <input type="text" placeholder="Filter: type name, lifetime:scoped|singleton|transient" value="@Query" @oninput="OnQuery" />
+            <label><input type="checkbox" checked="@_showFramework" @onchange='e => _showFramework = e.Value is true' /> framework</label>
+            <span class="bdt-muted bdt-nowrap">@_rows.Count / @(Host.Graph?.Count ?? 0)</span>
+        </div>
+        <div class="bdt-scroll">
+            @if (Host.Graph is null)
+            {
+                <div class="bdt-empty">The service collection was not captured (AddBlazorDevTools was called with a collection that could not be enumerated).</div>
+            }
+            else
+            {
+                <table>
+                    <thead><tr><th>Service</th><th>Lifetime</th><th>Implementation</th><th class="bdt-num">Deps</th><th class="bdt-num">Used by</th></tr></thead>
+                    <tbody>
+                        <Virtualize Items="_rows" ItemSize="23" Context="s">
+                            <tr class="bdt-row @(_selected == s ? "bdt-selected" : "")" @onclick="() => { _selected = s; }">
+                                <td class="bdt-mono bdt-truncate" style="max-width:260px" title="@s.ServiceType.FullName">@s.ServiceTypeName @(s.IsKeyed ? "🔑" : "") @(s.IsShadowed ? "(overridden)" : "")</td>
+                                <td><span class="bdt-chip bdt-@Fmt.Lifetime(s.Lifetime)">@Fmt.Lifetime(s.Lifetime)</span></td>
+                                <td class="bdt-mono bdt-truncate bdt-muted" style="max-width:220px">@s.ImplementationName</td>
+                                <td class="bdt-num">@s.Dependencies.Count</td>
+                                <td class="bdt-num">@s.Consumers.Count</td>
+                            </tr>
+                        </Virtualize>
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+    <div class="bdt-right">
+        @if (_selected is { } s)
+        {
+            <div class="bdt-section">
+                <div class="bdt-section-title bdt-mono">@s.ServiceTypeName</div>
+                <div class="bdt-section-body">
+                    <dl class="bdt-kv">
+                        <dt>Service type</dt><dd class="bdt-mono">@s.ServiceType.FullName</dd>
+                        <dt>Lifetime</dt><dd><span class="bdt-chip bdt-@Fmt.Lifetime(s.Lifetime)">@Fmt.Lifetime(s.Lifetime)</span></dd>
+                        <dt>Implementation</dt><dd class="bdt-mono">@(s.ImplementationType?.FullName ?? s.ImplementationName)</dd>
+                        <dt>Registration</dt><dd>@s.RegistrationKind @(s.IsKeyed ? "(keyed)" : "") @(s.IsShadowed ? "— overridden by a later registration of the same type" : "") · #@s.Index in the collection</dd>
+                        <dt>Transitive deps</dt><dd>@s.SubtreeSize</dd>
+                    </dl>
+                    @if (s.RegistrationKind != "Type")
+                    {
+                        <div class="bdt-muted">Dependencies of factory/instance registrations cannot be inspected without executing them.</div>
+                    }
+                </div>
+            </div>
+            <div class="bdt-section">
+                <div class="bdt-section-title">Dependency tree</div>
+                <div class="bdt-section-body">
+                    @if (s.Dependencies.Count == 0 && s.UnresolvedDependencies.Count == 0)
+                    {
+                        <div class="bdt-muted">No constructor dependencies.</div>
+                    }
+                    @DependencyTree(s, 0, new HashSet<int>())
+                    @foreach (var u in s.UnresolvedDependencies)
+                    {
+                        <div class="bdt-mono bdt-muted">? @u <span class="bdt-chip bdt-warn">not registered</span></div>
+                    }
+                </div>
+            </div>
+            <div class="bdt-section">
+                <div class="bdt-section-title">Consumers (@s.Consumers.Count) <span class="bdt-muted" style="font-weight:normal">constructor injection only</span></div>
+                <div class="bdt-section-body">
+                    @foreach (var c in s.Consumers)
+                    {
+                        var consumer = c;
+                        <div><a class="bdt-mono" @onclick="() => _selected = consumer">@c.ServiceTypeName</a> <span class="bdt-chip bdt-@Fmt.Lifetime(c.Lifetime)">@Fmt.Lifetime(c.Lifetime)</span></div>
+                    }
+                    @foreach (var comp in _componentConsumers)
+                    {
+                        <div><span class="bdt-mono">@comp</span> <span class="bdt-chip">component [Inject]</span></div>
+                    }
+                </div>
+            </div>
+            @if (_findings.Count > 0)
+            {
+                <div class="bdt-section">
+                    <div class="bdt-section-title">Findings</div>
+                    <div class="bdt-section-body">
+                        @foreach (var f in _findings)
+                        {
+                            <div class="bdt-diag"><div class="bdt-diag-title"><span class="bdt-sev-dot bdt-@f.Severity.ToString().ToLowerInvariant()"></span>@f.Title</div><div class="bdt-diag-evidence">@f.Evidence</div><div class="bdt-diag-suggestion">@f.Suggestion</div></div>
+                        }
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="bdt-empty">Select a service to see its dependency tree, consumers and lifetime findings (captive dependencies, cycles).</div>
+        }
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    private DevToolsUiState Ui => Host.Ui;
+
+    private string? Query => Ui.GetQuery("services");
+
+    private List<ServiceInfo> _rows = [];
+    private ServiceInfo? _selected;
+    private bool _showFramework;
+    private List<Diagnostic> _findings = [];
+    private List<string> _componentConsumers = [];
+
+    protected override void OnParametersSet()
+    {
+        var graph = Host.Graph;
+        if (graph is null)
+        {
+            return;
+        }
+
+        var filter = QueryFilter.Parse(Query);
+        var lifetime = filter.Token("lifetime");
+        _rows = graph.Services
+            .Where(s => (_showFramework || !s.IsFramework || filter.Terms.Count > 0) && !s.IsShadowed)
+            .Where(s => filter.MatchesText(s.ServiceTypeName, s.ServiceType.FullName, s.ImplementationName))
+            .Where(s => lifetime is null || Fmt.Lifetime(s.Lifetime).StartsWith(lifetime, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(s => s.IsFramework).ThenBy(s => s.ServiceTypeName)
+            .ToList();
+        if (_selected is null && filter.Terms.Count == 1 && _rows.Count > 0 && _rows[0].ServiceTypeName.Equals(filter.Terms[0], StringComparison.OrdinalIgnoreCase))
+        {
+            _selected = _rows[0];
+        }
+
+        if (_selected is { } s)
+        {
+            _findings = graph.Analyze().Where(d => d.Evidence.Contains(s.ServiceTypeName, StringComparison.Ordinal) || d.Title.Contains(s.ServiceTypeName, StringComparison.Ordinal)).ToList();
+            _componentConsumers = Host.Session.Components.All.Where(c => !c.IsDisposed && !c.IsDevTools)
+                .Where(c => c.Type.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic).Any(p => p.IsDefined(typeof(InjectAttribute), true) && p.PropertyType == s.ServiceType))
+                .Select(c => c.DisplayName).Distinct().OrderBy(n => n).ToList();
+        }
+    }
+
+    private void OnQuery(ChangeEventArgs e)
+    {
+        Ui.SetQuery("services", e.Value?.ToString());
+        _selected = null;
+    }
+
+    private RenderFragment DependencyTree(ServiceInfo service, int depth, HashSet<int> visited) => __builder =>
+    {
+        if (depth > 6 || !visited.Add(service.Index))
+        {
+            return;
+        }
+
+        foreach (var dep in service.Dependencies)
+        {
+            var d = dep;
+            var captive = service.Lifetime == ServiceLifetime.Singleton && d.Lifetime != ServiceLifetime.Singleton;
+            <div style="padding-left:@(depth * 14)px">
+                <a class="bdt-mono" @onclick="() => _selected = d">@d.ServiceTypeName</a>
+                <span class="bdt-chip bdt-@Fmt.Lifetime(d.Lifetime)">@Fmt.Lifetime(d.Lifetime)</span>
+                @if (captive) { <span class="bdt-chip bdt-err">captive</span> }
+            </div>
+            @DependencyTree(d, depth + 1, visited)
+        }
+    };
+}

@@ -1,0 +1,124 @@
+@namespace BlazorDevTools.UI
+
+<div class="bdt-split">
+    <div class="bdt-left" style="flex-basis:50%">
+        <div class="bdt-toolbar">
+            <input type="text" placeholder="Filter: text, source:render|http|javascript|circuit|js-interop" value="@Query" @oninput="OnQuery" />
+            <button type="button" @onclick="() => Session.Errors.Clear()">Clear</button>
+            <span class="bdt-muted bdt-nowrap">@_rows.Count errors · @Session.Errors.TotalOccurrences occurrences</span>
+        </div>
+        <div class="bdt-scroll">
+            @if (_rows.Count == 0)
+            {
+                <div class="bdt-empty">No errors. Render exceptions, event handler exceptions, ErrorBoundary catches, JS errors, HTTP failures, JS interop failures and circuit errors all land here.</div>
+            }
+            else
+            {
+                <table>
+                    <thead><tr><th>Time</th><th>Source</th><th>Error</th><th>Component</th><th class="bdt-num">×</th></tr></thead>
+                    <tbody>
+                        <Virtualize Items="_rows" ItemSize="23" Context="e">
+                            <tr class="bdt-row bdt-sev-error @(Ui.SelectedErrorId == e.Id ? "bdt-selected" : "")" @onclick="() => { Ui.SelectedErrorId = e.Id; Ui.Touch(); }">
+                                <td class="bdt-mono">@Fmt.Time(e.LastSeen)</td>
+                                <td><span class="bdt-chip">@e.Source</span></td>
+                                <td class="bdt-truncate" style="max-width:360px" title="@e.Message"><span class="bdt-mono">@ErrorCenter.ShortTypeName(e.ExceptionType)</span>: @e.Message</td>
+                                <td>@if (e.ComponentInstanceId is { } id) { <a @onclick:stopPropagation="true" @onclick="() => Host.SelectComponent(id)">@e.ComponentName</a> }</td>
+                                <td class="bdt-num">@(e.Count > 1 ? e.Count : "")</td>
+                            </tr>
+                        </Virtualize>
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+    <div class="bdt-right">
+        @if (_selected is { } s)
+        {
+            <div class="bdt-section">
+                <div class="bdt-section-title"><span class="bdt-chip bdt-err">@s.Source</span> <span class="bdt-mono">@s.ExceptionType</span></div>
+                <div class="bdt-section-body">
+                    <div style="margin-bottom:6px">@s.Message</div>
+                    <dl class="bdt-kv">
+                        <dt>First seen</dt><dd>@Fmt.Time(s.At)</dd>
+                        <dt>Last seen</dt><dd>@Fmt.Time(s.LastSeen) (@s.Count occurrence@(s.Count == 1 ? "" : "s"))</dd>
+                        @if (s.SourceLocation is not null)
+                        {
+                            <dt>Location</dt><dd class="bdt-mono">@s.SourceLocation</dd>
+                        }
+                        @if (s.ComponentInstanceId is { } cid)
+                        {
+                            <dt>Component</dt><dd><a @onclick="() => Host.SelectComponent(cid)">@s.ComponentName #@cid ↗</a></dd>
+                        }
+                        <dt>Preceded by</dt>
+                        <dd>@if (_preceding is { } p) { <a @onclick="() => Host.SelectEvent(p.Id)"><span class="@Fmt.KindClass(p.Kind)">@Fmt.KindLabel(p.Kind)</span> @p.Title ↗</a> } else { <span class="bdt-muted">no UI event recorded before this error</span> }</dd>
+                        <dt>Timeline</dt><dd><a @onclick="() => Host.SelectEvent(s.TimelineEventId)">open ↗</a></dd>
+                    </dl>
+                    @if (s.Exception?.InnerException is { } inner)
+                    {
+                        <div style="margin-top:6px"><strong>Inner:</strong> <span class="bdt-mono">@inner.GetType().Name</span>: @inner.Message</div>
+                    }
+                    @if (s.StackTrace is not null)
+                    {
+                        <div style="margin-top:6px; display:flex; gap:6px; align-items:center"><strong>Stack trace</strong> <button type="button" @onclick="() => Copy(s)">Copy</button></div>
+                        <pre class="bdt-pre">@s.StackTrace</pre>
+                    }
+                </div>
+            </div>
+            <div class="bdt-section">
+                <div class="bdt-section-title">Activity before the error</div>
+                <div class="bdt-section-body">
+                    @if (_before.Count == 0)
+                    {
+                        <div class="bdt-muted">Nothing recorded before it.</div>
+                    }
+                    @foreach (var b in _before)
+                    {
+                        <div><a @onclick="() => Host.SelectEvent(b.Id)"><span class="@Fmt.KindClass(b.Kind)">@Fmt.KindLabel(b.Kind)</span> @b.Title</a> <span class="bdt-muted">@Fmt.Time(b.Timestamp)</span></div>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="bdt-empty">Select an error to see its stack trace, the component involved and what happened right before it.</div>
+        }
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    private DevToolsSession Session => Host.Session;
+
+    private DevToolsUiState Ui => Host.Ui;
+
+    private string? Query => Ui.GetQuery("errors");
+
+    private List<ErrorRecord> _rows = [];
+    private ErrorRecord? _selected;
+    private DevToolsEvent? _preceding;
+    private List<DevToolsEvent> _before = [];
+
+    protected override void OnParametersSet()
+    {
+        var filter = QueryFilter.Parse(Query);
+        var source = filter.Token("source");
+        _rows = Session.Errors.Snapshot().Reverse().Where(e => filter.MatchesText(e.Message, e.ExceptionType, e.ComponentName, e.Source) && (source is null || e.Source.StartsWith(source, StringComparison.OrdinalIgnoreCase))).ToList();
+        _selected = Ui.SelectedErrorId is { } id ? Session.Errors.Find(id) : null;
+        if (_selected is not null)
+        {
+            _preceding = _selected.PrecedingEventId is { } pid ? Session.Timeline.Find(pid) : null;
+            var all = Session.Timeline.Snapshot();
+            var index = Array.FindIndex(all, e => e.Id == _selected.TimelineEventId);
+            _before = index <= 0 ? [] : all.Skip(Math.Max(0, index - 10)).Take(Math.Min(10, index)).Reverse().ToList();
+        }
+    }
+
+    private void OnQuery(ChangeEventArgs e) => Ui.SetQuery("errors", e.Value?.ToString());
+
+    private async Task Copy(ErrorRecord e)
+    {
+        var ok = await Host.CopyAsync(e.ExceptionType + ": " + e.Message + "\n" + e.StackTrace);
+        Host.Notify(ok ? "Copied" : "Clipboard unavailable");
+    }
+}

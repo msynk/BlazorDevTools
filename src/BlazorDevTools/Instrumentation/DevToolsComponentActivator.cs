@@ -1,0 +1,134 @@
+using System.Collections.Concurrent;
+using BlazorDevTools.Events;
+using BlazorDevTools.Session;
+using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace BlazorDevTools.Instrumentation;
+
+/// <summary>Holds the activator that was registered before DevTools so it keeps working (custom activators, bUnit factories).</summary>
+internal sealed class InnerComponentActivator(IComponentActivator activator)
+{
+    public IComponentActivator Activator { get; } = activator;
+}
+
+/// <summary>
+/// Public <see cref="IComponentActivator"/> hook: every component instance the renderer creates passes through here,
+/// which is how DevTools learns about components without touching application source.
+/// </summary>
+internal sealed class DevToolsComponentActivator : IComponentActivator
+{
+    private static readonly ConcurrentDictionary<Type, ObjectFactory> Factories = new();
+    private static readonly System.Reflection.Assembly DevToolsAssembly = typeof(DevToolsComponentActivator).Assembly;
+    private readonly ConcurrentDictionary<Type, (bool Ignore, bool Hidden, bool DevTools)> _typeFlags = new();
+    private readonly IServiceProvider _services;
+    private readonly DevToolsSession _session;
+    private readonly IComponentActivator? _inner;
+    private readonly DevToolsOptions _options;
+
+    public DevToolsComponentActivator(IServiceProvider services, DevToolsSession session, DevToolsOptions options, InnerComponentActivator? inner = null)
+    {
+        _services = services;
+        _session = session;
+        _options = options;
+        _inner = inner?.Activator;
+    }
+
+    public IComponent CreateInstance(Type componentType)
+    {
+        var instance = _inner is not null ? _inner.CreateInstance(componentType) : CreateDefault(componentType);
+        if (!_session.IsEnabled)
+        {
+            return instance;
+        }
+
+        try
+        {
+            Track(instance, componentType);
+        }
+        catch (Exception ex)
+        {
+            _session.Errors.Record(ex, "devtools", "Component instrumentation failed for " + componentType.Name);
+        }
+
+        return instance;
+    }
+
+    private IComponent CreateDefault(Type componentType)
+    {
+        if (!typeof(IComponent).IsAssignableFrom(componentType))
+        {
+            throw new ArgumentException($"The type {componentType.FullName} does not implement {nameof(IComponent)}.", nameof(componentType));
+        }
+
+        var factory = Factories.GetOrAdd(componentType, static t => ActivatorUtilities.CreateFactory(t, Type.EmptyTypes));
+        return (IComponent)factory(_services, null);
+    }
+
+    private void Track(IComponent instance, Type componentType)
+    {
+        var flags = _typeFlags.GetOrAdd(componentType, ComputeFlags);
+        if (flags.Ignore)
+        {
+            return;
+        }
+
+        var record = _session.Components.Register(instance, instance.GetType(), flags.DevTools, flags.Hidden);
+        _session.RenderTracker.Instrument(record);
+        if (!flags.DevTools && !flags.Hidden)
+        {
+            _session.Timeline.Record(new DevToolsEvent
+            {
+                Kind = DevToolsEventKind.Lifecycle,
+                Category = "lifecycle",
+                Title = record.DisplayName + " created",
+                ComponentInstanceId = record.InstanceId,
+                ComponentName = record.DisplayName,
+                ParentEventId = ActivityObserver.CurrentTriggerEvent(_session)?.Id,
+            });
+        }
+    }
+
+    private (bool Ignore, bool Hidden, bool DevTools) ComputeFlags(Type type)
+    {
+        if (type.IsDefined(typeof(DevToolsIgnoreAttribute), true))
+        {
+            return (true, false, false);
+        }
+
+        foreach (var predicate in _options.IgnoreComponentPredicates)
+        {
+            if (predicate(type))
+            {
+                return (true, false, false);
+            }
+        }
+
+        var ns = type.Namespace ?? string.Empty;
+        // DevTools' own UI: the core assembly, or panel components shipped by the DevTools extension packages.
+        var isDevTools = type.Assembly == DevToolsAssembly || ns.StartsWith("BlazorDevTools.Server.UI", StringComparison.Ordinal);
+        var hidden = false;
+        foreach (var prefix in _options.HiddenComponentNamespaces)
+        {
+            if (ns.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                hidden = true;
+                break;
+            }
+        }
+
+        if (!hidden)
+        {
+            foreach (var prefix in _session.Registry.HiddenNamespaces)
+            {
+                if (ns.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    hidden = true;
+                    break;
+                }
+            }
+        }
+
+        return (false, hidden, isDevTools);
+    }
+}

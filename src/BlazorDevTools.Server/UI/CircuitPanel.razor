@@ -1,0 +1,82 @@
+@namespace BlazorDevTools.Server.UI
+@using BlazorDevTools.Session
+@using BlazorDevTools.UI
+@using Microsoft.AspNetCore.Components.Server.Circuits
+@inject DevToolsSession Session
+@inject CircuitRegistry Registry
+@inject IEnumerable<CircuitHandler> Handlers
+
+<div class="bdt-stat-grid">
+    <div class="bdt-stat"><div class="bdt-stat-value">@Registry.ActiveCount</div><div class="bdt-stat-label">active circuits in this process (@Registry.ConnectedCount connected)</div></div>
+    <div class="bdt-stat"><div class="bdt-stat-value">@Registry.TotalOpened / @Registry.TotalClosed</div><div class="bdt-stat-label">opened / closed since start</div></div>
+    @if (_mine is { } m)
+    {
+        <div class="bdt-stat"><div class="bdt-stat-value">@(m.IsConnected ? "connected" : "disconnected")</div><div class="bdt-stat-label">this circuit @m.ShortId · @m.Disconnects disconnect(s)</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Num(m.Duration.TotalSeconds) s</div><div class="bdt-stat-label">circuit age</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@m.InboundMessages</div><div class="bdt-stat-label">inbound messages · avg @Fmt.Ms(m.InboundMessages == 0 ? 0 : m.InboundProcessingMs / m.InboundMessages) · max @Fmt.Ms(m.MaxInboundMs)</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@(Session.Browser.ReconnectState ?? "–")</div><div class="bdt-stat-label">browser reconnect state · @Session.Browser.ReconnectCount reconnect dialogs</div></div>
+    }
+    else
+    {
+        <div class="bdt-stat"><div class="bdt-stat-value">n/a</div><div class="bdt-stat-label">this session's circuit handler is not registered (call AddBlazorDevToolsServer)</div></div>
+    }
+</div>
+<div class="bdt-section">
+    <div class="bdt-section-title">Circuits <span class="bdt-muted" style="font-weight:normal">only aggregate facts of other circuits are visible; their components and events stay private to their own sessions</span></div>
+    <div class="bdt-section-body">
+        <table>
+            <thead><tr><th>Circuit</th><th>State</th><th>Opened</th><th class="bdt-num">Age</th><th class="bdt-num">Disconnects</th><th class="bdt-num">Inbound</th><th class="bdt-num">Max inbound</th><th class="bdt-num">Errors</th><th>Last activity</th></tr></thead>
+            <tbody>
+                @foreach (var c in Registry.Circuits)
+                {
+                    <tr class="@(c.SessionId == Session.Id ? "bdt-selected" : "")">
+                        <td class="bdt-mono">@c.ShortId @(c.SessionId == Session.Id ? "(this)" : "")</td>
+                        <td>@if (c.IsClosed) { <span class="bdt-chip">closed</span> } else if (c.IsConnected) { <span class="bdt-chip bdt-ok">connected</span> } else { <span class="bdt-chip bdt-warn">disconnected</span> }</td>
+                        <td class="bdt-mono">@Fmt.Time(c.OpenedAt)</td>
+                        <td class="bdt-num">@Fmt.Num(c.Duration.TotalSeconds) s</td>
+                        <td class="bdt-num @(c.Disconnects > 1 ? "bdt-err" : "")">@c.Disconnects</td>
+                        <td class="bdt-num">@c.InboundMessages</td>
+                        <td class="bdt-num">@Fmt.Ms(c.MaxInboundMs)</td>
+                        <td class="bdt-num @(c.Errors > 0 ? "bdt-err" : "")">@c.Errors</td>
+                        <td>@Fmt.Ago(c.LastActivityAt)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+<div class="bdt-section">
+    <div class="bdt-section-title">Circuit events for this session</div>
+    <div class="bdt-section-body">
+        @foreach (var e in _events)
+        {
+            <div class="bdt-ev-row @Fmt.SevClass(e.Severity)" @onclick="() => Host.SelectEvent(e.Id)">
+                <span class="bdt-time">@Fmt.Time(e.Timestamp)</span>
+                <span class="@Fmt.KindClass(e.Kind)">@Fmt.KindLabel(e.Kind)</span>
+                <span class="bdt-ev-title">@e.Title @if (e.Detail is not null) { <span class="bdt-muted">· @e.Detail</span> }</span>
+            </div>
+        }
+        @if (_events.Length == 0)
+        {
+            <div class="bdt-muted">No circuit events yet.</div>
+        }
+    </div>
+</div>
+<div class="bdt-section">
+    <div class="bdt-section-body bdt-muted">
+        Not available from the framework: SignalR message sizes, round-trip latency and per-message payloads. Use SignalR logging (<code>Microsoft.AspNetCore.SignalR</code> at Debug) or the browser's WS frame inspector for those.
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    private CircuitInfo? _mine;
+    private DevToolsEvent[] _events = [];
+
+    protected override void OnParametersSet()
+    {
+        _mine = Handlers.OfType<DevToolsCircuitHandler>().FirstOrDefault()?.Info;
+        _events = Session.Timeline.Snapshot().Where(e => e.Kind == DevToolsEventKind.Circuit).Reverse().Take(50).ToArray();
+    }
+}

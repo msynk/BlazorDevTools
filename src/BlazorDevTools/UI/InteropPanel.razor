@@ -1,0 +1,70 @@
+@namespace BlazorDevTools.UI
+
+<div class="bdt-split">
+    <div class="bdt-left" style="flex-basis:50%">
+        <div class="bdt-toolbar"><strong>By identifier</strong> <span class="bdt-muted">(→ .NET→JS, ← JS→.NET)</span> <button type="button" style="margin-left:auto" @onclick="() => Session.Interop.Clear()">Clear</button></div>
+        <div class="bdt-scroll">
+            @if (_aggregates.Length == 0)
+            {
+                <div class="bdt-empty">No JS interop calls captured. Calls through <code>IJSRuntime</code> injected into components (and modules obtained from it) are tracked automatically; services can opt in with <code>jsRuntime.WithDevToolsTracking(session)</code>.</div>
+            }
+            else
+            {
+                <table>
+                    <thead><tr><th>Identifier</th><th class="bdt-num">Calls</th><th class="bdt-num">Total</th><th class="bdt-num">Avg</th><th class="bdt-num">Max</th><th class="bdt-num">Failed</th></tr></thead>
+                    <tbody>
+                        @foreach (var a in _aggregates)
+                        {
+                            <tr class="bdt-row" @onclick='() => Host.ShowPanel("timeline", "kind:js " + a.Identifier)'>
+                                <td class="bdt-mono bdt-truncate" style="max-width:280px">@(a.Direction == JsInteropDirection.DotNetToJs ? "→" : "←") @a.Identifier</td>
+                                <td class="bdt-num">@a.Count</td>
+                                <td class="bdt-num">@Fmt.Ms(a.TotalMs)</td>
+                                <td class="bdt-num">@Fmt.Ms(a.Count == 0 ? 0 : a.TotalMs / a.Count)</td>
+                                <td class="bdt-num @(a.MaxMs >= Session.Options.Diagnostics.SlowJsInteropMs ? "bdt-err" : "")">@Fmt.Ms(a.MaxMs)</td>
+                                <td class="bdt-num @(a.Failures > 0 ? "bdt-err" : "")">@a.Failures</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            @if (Session.Browser.UntrackedDotNetToJsCalls > 0)
+            {
+                <div class="bdt-empty">@Session.Browser.UntrackedDotNetToJsCalls .NET→JS calls were seen by the browser but not attributed (made from services or framework internals).</div>
+            }
+        </div>
+    </div>
+    <div class="bdt-right">
+        <div class="bdt-toolbar"><strong>Recent calls</strong> <span class="bdt-muted">newest first</span></div>
+        <div class="bdt-scroll">
+            <table>
+                <thead><tr><th>Time</th><th>Call</th><th>Component</th><th class="bdt-num">Duration</th><th>Result</th></tr></thead>
+                <tbody>
+                    <Virtualize Items="_calls" ItemSize="23" Context="c">
+                        <tr class="bdt-row @(c.Succeeded ? "" : "bdt-sev-error")" @onclick="() => Host.SelectEvent(c.TimelineEventId)">
+                            <td class="bdt-mono">@Fmt.Time(c.At)</td>
+                            <td class="bdt-mono bdt-truncate" style="max-width:240px" title="args: @(c.ArgumentTypes ?? "none")">@(c.Direction == JsInteropDirection.DotNetToJs ? "→" : "←") @c.Identifier (@c.ArgumentCount)</td>
+                            <td>@if (c.ComponentInstanceId is { } id) { <a @onclick:stopPropagation="true" @onclick="() => Host.SelectComponent(id)">@c.ComponentName</a> } else { <span class="bdt-muted">–</span> }</td>
+                            <td class="bdt-num">@(c.DurationMs is null ? "…" : Fmt.Ms(c.DurationMs))</td>
+                            <td class="bdt-truncate @(c.Succeeded ? "bdt-muted" : "bdt-err")" style="max-width:200px" title="@c.Error">@(c.Succeeded ? (c.ResultType ?? "") : c.Error)</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    private DevToolsSession Session => Host.Session;
+
+    private JsInteropAggregate[] _aggregates = [];
+    private List<JsInteropRecord> _calls = [];
+
+    protected override void OnParametersSet()
+    {
+        _aggregates = Session.Interop.Aggregates().OrderByDescending(a => a.TotalMs).ToArray();
+        _calls = Session.Interop.Snapshot().Reverse().ToList();
+    }
+}

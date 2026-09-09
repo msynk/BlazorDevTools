@@ -1,0 +1,294 @@
+@namespace BlazorDevTools.UI
+
+<div class="bdt-split">
+    <div class="bdt-left" style="flex-basis:58%">
+        <div class="bdt-toolbar">
+            <input type="text" placeholder='Filter: text, kind:render, component:12, severity:error, id:45' value="@Query" @oninput="OnQuery" />
+            <button type="button" @onclick="() => Session.Timeline.Clear()" title="Clear timeline">Clear</button>
+            <label><input type="checkbox" checked="@_showLanes" @onchange='e => _showLanes = e.Value is true' /> lanes</label>
+            <span class="bdt-muted bdt-nowrap">@_events.Count / @_all.Length</span>
+        </div>
+        <div class="bdt-chips" style="padding:3px 6px; border-bottom:1px solid var(--bdt-border)">
+            @foreach (var kind in Kinds)
+            {
+                var k = kind;
+                <button type="button" class="bdt-chip @(Ui.HiddenTimelineKinds.Contains(k) ? "bdt-off" : "bdt-on")" @onclick="() => ToggleKind(k)">@Fmt.KindLabel(k)</button>
+            }
+        </div>
+        @if (_showLanes)
+        {
+            <div class="bdt-lanes" title="Last @WindowSeconds seconds; click a bar to select">
+                <svg viewBox="0 0 1000 96" preserveAspectRatio="none">
+                    @for (var i = 0; i < Lanes.Length; i++)
+                    {
+                        var y = i * 16;
+                        @((MarkupString)$"<text x=\"2\" y=\"{y + 11}\" font-size=\"9\" fill=\"var(--bdt-fg2)\" font-family=\"var(--bdt-sans)\">{Lanes[i].Label}</text>")
+                        <line x1="0" x2="1000" y1="@(y + 15.5)" y2="@(y + 15.5)" stroke="var(--bdt-border)" stroke-width="0.5" />
+                    }
+                    @foreach (var bar in _bars)
+                    {
+                        <rect x="@bar.X.ToString(System.Globalization.CultureInfo.InvariantCulture)" y="@(bar.Lane * 16 + 3)" width="@bar.W.ToString(System.Globalization.CultureInfo.InvariantCulture)" height="10" fill="@bar.Color" opacity="@(bar.Selected ? "1" : "0.8")" stroke="@(bar.Selected ? "var(--bdt-fg)" : "none")" @onclick="() => Select(bar.Id)"><title>@bar.Title</title></rect>
+                    }
+                </svg>
+            </div>
+        }
+        <div class="bdt-scroll">
+            @if (_events.Count == 0)
+            {
+                <div class="bdt-empty">No events match.</div>
+            }
+            else
+            {
+                <Virtualize Items="_events" ItemSize="22" Context="e" OverscanCount="30">
+                    <div class="bdt-ev-row @(Ui.SelectedEventId == e.Id ? "bdt-selected" : "") @Fmt.SevClass(e.Severity)" @onclick="() => Select(e.Id)" title="@e.Detail">
+                        <span class="bdt-time">@Fmt.Time(e.Timestamp)</span>
+                        <span class="@Fmt.KindClass(e.Kind)">@Fmt.KindLabel(e.Kind)</span>
+                        <span class="bdt-ev-title">@e.Title @if (e.ComponentName is not null && e.Kind != DevToolsEventKind.Render) { <span class="bdt-muted">· @e.ComponentName</span> }</span>
+                        <span class="bdt-ev-dur">@(e.DurationMs is null ? "" : Fmt.Ms(e.DurationMs))</span>
+                    </div>
+                </Virtualize>
+            }
+        </div>
+    </div>
+    <div class="bdt-right">
+        @if (_selected is { } s)
+        {
+            <div class="bdt-section">
+                <div class="bdt-section-title"><span class="@Fmt.KindClass(s.Kind)">@Fmt.KindLabel(s.Kind)</span> @s.Title</div>
+                <div class="bdt-section-body">
+                    <dl class="bdt-kv">
+                        <dt>Time</dt><dd>@Fmt.Time(s.Timestamp) <span class="bdt-muted">@Fmt.Rel(s.Timestamp, Session.StartedAt) since session start</span></dd>
+                        <dt>Duration</dt><dd>@(s.DurationMs is null ? "n/a" : Fmt.Ms(s.DurationMs))</dd>
+                        <dt>Category</dt><dd class="bdt-mono">@s.Category</dd>
+                        <dt>Severity</dt><dd>@s.Severity</dd>
+                        @if (s.Detail is not null)
+                        {
+                            <dt>Detail</dt><dd>@s.Detail</dd>
+                        }
+                        @if (s.ComponentInstanceId is { } cid)
+                        {
+                            <dt>Component</dt><dd><a @onclick="() => Host.SelectComponent(cid)">@s.ComponentName #@cid</a></dd>
+                        }
+                        @if (s.Data is { Count: > 0 })
+                        {
+                            <dt>Data</dt><dd><ValueTree Root="s.Data" Name="data" Inspector="Session.Inspector" ChildrenOnly="true" /></dd>
+                        }
+                    </dl>
+                    @if (s.Data?.TryGetValue("errorId", out var errorId) == true && errorId is long eid)
+                    {
+                        <button type="button" @onclick="() => Host.SelectError(eid)">Open error ↗</button>
+                    }
+                    @if (s.Data?.TryGetValue("requestId", out var requestId) == true && requestId is long rid)
+                    {
+                        <button type="button" @onclick="() => Host.SelectHttp(rid)">Open request ↗</button>
+                    }
+                </div>
+            </div>
+            <div class="bdt-section">
+                <div class="bdt-section-title">Caused by</div>
+                <div class="bdt-section-body">
+                    @if (_ancestors.Count == 0)
+                    {
+                        <div class="bdt-muted">No known trigger (not inside a UI event, navigation or parent render).</div>
+                    }
+                    @foreach (var a in _ancestors)
+                    {
+                        <div><a @onclick="() => Select(a.Id)"><span class="@Fmt.KindClass(a.Kind)">@Fmt.KindLabel(a.Kind)</span> @a.Title</a> <span class="bdt-muted">@Fmt.Time(a.Timestamp)</span></div>
+                    }
+                </div>
+            </div>
+            <div class="bdt-section">
+                <div class="bdt-section-title">Caused (@_children.Count)</div>
+                <div class="bdt-section-body">
+                    @if (_children.Count == 0)
+                    {
+                        <div class="bdt-muted">Nothing attributed to this event.</div>
+                    }
+                    @foreach (var c in _children.Take(200))
+                    {
+                        <div><a @onclick="() => Select(c.Id)"><span class="@Fmt.KindClass(c.Kind)">@Fmt.KindLabel(c.Kind)</span> @c.Title</a> <span class="bdt-muted">@(c.DurationMs is null ? "" : Fmt.Ms(c.DurationMs))</span></div>
+                    }
+                </div>
+            </div>
+            <div class="bdt-section">
+                <div class="bdt-section-title">Just before</div>
+                <div class="bdt-section-body">
+                    @foreach (var b in _before)
+                    {
+                        <div><a @onclick="() => Select(b.Id)"><span class="@Fmt.KindClass(b.Kind)">@Fmt.KindLabel(b.Kind)</span> @b.Title</a> <span class="bdt-muted">@Fmt.Time(b.Timestamp)</span></div>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="bdt-empty">Select an event to see what caused it and what it caused.</div>
+        }
+    </div>
+</div>
+
+@code {
+    private sealed record Bar(long Id, int Lane, double X, double W, string Color, string Title, bool Selected);
+
+    private static readonly DevToolsEventKind[] Kinds = Enum.GetValues<DevToolsEventKind>();
+
+    private static readonly (string Label, DevToolsEventKind[] Kinds, string Color)[] Lanes =
+    [
+        ("event", [DevToolsEventKind.UiEvent, DevToolsEventKind.Navigation], "var(--bdt-event)"),
+        ("render", [DevToolsEventKind.Render, DevToolsEventKind.RenderBatch], "var(--bdt-render)"),
+        ("state", [DevToolsEventKind.StateChange], "var(--bdt-state)"),
+        ("http", [DevToolsEventKind.Http], "var(--bdt-http)"),
+        ("js", [DevToolsEventKind.JsInterop], "var(--bdt-js)"),
+        ("error", [DevToolsEventKind.Error, DevToolsEventKind.Diagnostic, DevToolsEventKind.Circuit, DevToolsEventKind.Browser, DevToolsEventKind.Lifecycle, DevToolsEventKind.Custom], "var(--bdt-error)"),
+    ];
+
+    private const double WindowSeconds = 10;
+
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    private DevToolsSession Session => Host.Session;
+
+    private DevToolsUiState Ui => Host.Ui;
+
+    private string? Query => Ui.GetQuery("timeline");
+
+    private DevToolsEvent[] _all = [];
+    private List<DevToolsEvent> _events = [];
+    private List<Bar> _bars = [];
+    private DevToolsEvent? _selected;
+    private List<DevToolsEvent> _ancestors = [];
+    private List<DevToolsEvent> _children = [];
+    private List<DevToolsEvent> _before = [];
+    private bool _showLanes = true;
+
+    protected override void OnParametersSet()
+    {
+        _all = Session.Timeline.Snapshot();
+        var filter = QueryFilter.Parse(Query);
+        var kindToken = filter.Token("kind");
+        var componentToken = filter.LongToken("component");
+        var severityToken = filter.Token("severity");
+        var idToken = filter.LongToken("id");
+        var list = new List<DevToolsEvent>(_all.Length);
+        for (var i = _all.Length - 1; i >= 0; i--)
+        {
+            var e = _all[i];
+            if (Ui.HiddenTimelineKinds.Contains(e.Kind))
+            {
+                continue;
+            }
+
+            if (kindToken is not null && !e.Kind.ToString().StartsWith(kindToken, StringComparison.OrdinalIgnoreCase) && !Fmt.KindLabel(e.Kind).StartsWith(kindToken, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (componentToken is not null && e.ComponentInstanceId != componentToken)
+            {
+                continue;
+            }
+
+            if (severityToken is not null && !e.Severity.ToString().StartsWith(severityToken, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (idToken is not null && e.Id != idToken)
+            {
+                continue;
+            }
+
+            if (!filter.MatchesText(e.Title, e.Detail, e.ComponentName, e.Category))
+            {
+                continue;
+            }
+
+            list.Add(e);
+        }
+
+        _events = list;
+        if (idToken is not null && list.Count == 1)
+        {
+            Ui.SelectedEventId = list[0].Id;
+        }
+
+        _selected = Ui.SelectedEventId is { } id ? Session.Timeline.Find(id) : null;
+        if (_selected is not null)
+        {
+            _ancestors = [];
+            var current = _selected;
+            var hops = 0;
+            while (current.ParentEventId is { } pid && hops++ < 20 && Session.Timeline.Find(pid) is { } parent)
+            {
+                _ancestors.Add(parent);
+                current = parent;
+            }
+
+            var selectedId = _selected.Id;
+            _children = _all.Where(e => e.ParentEventId == selectedId).ToList();
+            var index = Array.FindIndex(_all, e => e.Id == selectedId);
+            _before = index < 0 ? [] : _all.Skip(Math.Max(0, index - 8)).Take(Math.Min(8, index)).Reverse().ToList();
+        }
+
+        if (_showLanes)
+        {
+            BuildBars();
+        }
+    }
+
+    private void BuildBars()
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var freq = (double)System.Diagnostics.Stopwatch.Frequency;
+        var windowTicks = WindowSeconds * freq;
+        var bars = new List<Bar>();
+        for (var i = _all.Length - 1; i >= 0; i--)
+        {
+            var e = _all[i];
+            var age = now - e.StartTicks;
+            if (age > windowTicks)
+            {
+                break;
+            }
+
+            if (Ui.HiddenTimelineKinds.Contains(e.Kind) || e.Kind == DevToolsEventKind.RenderBatch)
+            {
+                continue;
+            }
+
+            var lane = Array.FindIndex(Lanes, l => l.Kinds.Contains(e.Kind));
+            if (lane < 0)
+            {
+                continue;
+            }
+
+            var x = 1000 * (1 - age / windowTicks);
+            var w = Math.Max(2, 1000 * ((e.DurationMs ?? 0) / 1000 * freq) / windowTicks);
+            bars.Add(new Bar(e.Id, lane, Math.Round(x, 1), Math.Round(Math.Min(w, 1000 - x), 1), e.Severity == DevToolsSeverity.Error ? "var(--bdt-err)" : Lanes[lane].Color, e.Title, e.Id == Ui.SelectedEventId));
+            if (bars.Count > 600)
+            {
+                break;
+            }
+        }
+
+        _bars = bars;
+    }
+
+    private void OnQuery(ChangeEventArgs e) => Ui.SetQuery("timeline", e.Value?.ToString());
+
+    private void ToggleKind(DevToolsEventKind kind)
+    {
+        if (!Ui.HiddenTimelineKinds.Remove(kind))
+        {
+            Ui.HiddenTimelineKinds.Add(kind);
+        }
+
+        Ui.Touch();
+    }
+
+    private void Select(long id)
+    {
+        Ui.SelectedEventId = id;
+        Ui.Touch();
+    }
+}

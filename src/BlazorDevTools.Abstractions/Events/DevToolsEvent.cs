@@ -1,0 +1,70 @@
+namespace BlazorDevTools.Events;
+
+/// <summary>Broad classification of a timeline entry. Extensions use <see cref="Custom"/> with their own <see cref="DevToolsEvent.Category"/>.</summary>
+public enum DevToolsEventKind
+{
+    Render,
+    RenderBatch,
+    Lifecycle,
+    UiEvent,
+    StateChange,
+    Navigation,
+    Http,
+    JsInterop,
+    Error,
+    Circuit,
+    Browser,
+    Diagnostic,
+    Custom,
+}
+
+public enum DevToolsSeverity
+{
+    Info,
+    Warning,
+    Error,
+}
+
+/// <summary>
+/// One entry of the unified activity timeline. Instances are immutable from the point of view of extensions,
+/// except for <see cref="DurationMs"/>, <see cref="Detail"/> and <see cref="Severity"/> which the runtime may
+/// finalize once an asynchronous activity completes.
+/// </summary>
+public class DevToolsEvent
+{
+    /// <summary>Monotonic identifier assigned by the timeline when the event is recorded.</summary>
+    public long Id { get; set; }
+
+    /// <summary>Wall-clock time the activity started.</summary>
+    public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>High-resolution start timestamp (<see cref="System.Diagnostics.Stopwatch.GetTimestamp"/>) for ordering and duration math.</summary>
+    public long StartTicks { get; init; } = System.Diagnostics.Stopwatch.GetTimestamp();
+
+    public DevToolsEventKind Kind { get; init; } = DevToolsEventKind.Custom;
+
+    /// <summary>Short machine-friendly category such as "render", "http", "state:AppState".</summary>
+    public string Category { get; init; } = "custom";
+
+    public string Title { get; init; } = string.Empty;
+
+    /// <summary>Optional longer description shown when the event is selected.</summary>
+    public string? Detail { get; set; }
+
+    public double? DurationMs { get; set; }
+
+    public DevToolsSeverity Severity { get; set; } = DevToolsSeverity.Info;
+
+    /// <summary>The event that caused this one, when known (e.g. a UI event that caused a render).</summary>
+    public long? ParentEventId { get; set; }
+
+    /// <summary>Stable identifier of the component instance this event relates to, when known.</summary>
+    public long? ComponentInstanceId { get; init; }
+
+    public string? ComponentName { get; init; }
+
+    /// <summary>Small bag of structured data. Values are inspected lazily by the UI; keep them small.</summary>
+    public IReadOnlyDictionary<string, object?>? Data { get; init; }
+
+    public override string ToString() => $"[{Kind}] {Title}";
+}

@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/samples/" />
+  <Folder Name="/samples/DevToolsDemo/">
+    <Project Path="samples/DevToolsDemo/DevToolsDemo.Client/DevToolsDemo.Client.csproj" />
+    <Project Path="samples/DevToolsDemo/DevToolsDemo/DevToolsDemo.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/BlazorDevTools.Abstractions/BlazorDevTools.Abstractions.csproj" />
+    <Project Path="src/BlazorDevTools.Server/BlazorDevTools.Server.csproj" />
+    <Project Path="src/BlazorDevTools/BlazorDevTools.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BlazorDevTools.Tests/BlazorDevTools.Tests.csproj" />
+  </Folder>
+</Solution>

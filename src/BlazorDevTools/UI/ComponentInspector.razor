@@ -1,0 +1,255 @@
+@namespace BlazorDevTools.UI
+@using System.Reflection
+@using BlazorDevTools.Instrumentation
+
+<div class="bdt-toolbar">
+    <strong class="bdt-mono">@Record.DisplayName</strong>
+    <span class="bdt-chip">#@Record.InstanceId</span>
+    @if (Record.IsDisposed)
+    {
+        <span class="bdt-chip bdt-warn">disposed @Fmt.Ago(Record.DisposedAt)</span>
+    }
+    @if (Record.Parent is { } parent)
+    {
+        <span class="bdt-muted">in</span> <a @onclick="() => Host.SelectComponent(parent.InstanceId)">@parent.DisplayName</a>
+    }
+    <span style="margin-left:auto"></span>
+    <button type="button" @onclick='() => Host.ShowPanel("timeline", "component:" + Record.InstanceId)'>Events ↗</button>
+    <button type="button" @onclick='() => Host.ShowPanel("profiler", Record.DisplayName)'>Profiler ↗</button>
+</div>
+<div class="bdt-scroll">
+    <InspectorSection Title="Type & source">
+        <dl class="bdt-kv">
+            <dt>Type</dt><dd class="bdt-mono">@Record.TypeName</dd>
+            <dt>Assembly</dt><dd class="bdt-mono">@Record.Type.Assembly.GetName().Name</dd>
+            <dt>Source</dt><dd class="bdt-mono">@Fmt.ComponentFile(Record.Type) <span class="bdt-muted">(inferred from type name)</span></dd>
+            <dt>Base</dt><dd class="bdt-mono">@_baseName</dd>
+            <dt>Renderer id</dt><dd>@(Record.ComponentId?.ToString() ?? "unresolved")</dd>
+            <dt>Created</dt><dd>@Fmt.Time(Record.CreatedAt) (@Fmt.Ago(Record.CreatedAt))</dd>
+            @if (!Record.IsInstrumented)
+            {
+                <dt>Note</dt><dd class="bdt-muted">@Record.InstrumentationNote</dd>
+            }
+        </dl>
+    </InspectorSection>
+    <InspectorSection Title="@($"Parameters ({_parameters.Count})")">
+        @if (_parameters.Count == 0)
+        {
+            <div class="bdt-muted">No [Parameter] properties.</div>
+        }
+        @foreach (var p in _parameters)
+        {
+            <ValueTree Root="p.Value" Name="@p.Name" Inspector="Session.Inspector" Member="p.MemberInfo" />
+        }
+    </InspectorSection>
+    <InspectorSection Title="@($"Cascading values ({_cascading.Count})")">
+        @if (_cascading.Count == 0)
+        {
+            <div class="bdt-muted">No [CascadingParameter] properties.</div>
+        }
+        @foreach (var p in _cascading)
+        {
+            <ValueTree Root="p.Value" Name="@p.Name" Inspector="Session.Inspector" Member="p.MemberInfo" />
+        }
+    </InspectorSection>
+    <InspectorSection Title="@($"State ({_state.Count} fields)")">
+        @if (Record.LastRender?.ChangedState is { Count: > 0 } changed)
+        {
+            <div class="bdt-chip bdt-warn" style="margin-bottom:4px">changed before last render:</div>
+            <ul class="bdt-mono" style="margin:0 0 6px 16px; padding:0">
+                @foreach (var c in changed)
+                {
+                    <li>@c</li>
+                }
+            </ul>
+        }
+        else if (Record.RenderCount > 1)
+        {
+            <div class="bdt-muted" style="margin-bottom:4px">No field changed before the last render (or capture started after it).</div>
+        }
+        @if (_state.Count == 0)
+        {
+            <div class="bdt-muted">No inspectable fields.</div>
+        }
+        @foreach (var f in _state)
+        {
+            <ValueTree Root="f.Value" Name="@f.Name" Inspector="Session.Inspector" Member="f.MemberInfo" />
+        }
+    </InspectorSection>
+    <InspectorSection Title="@($"Injected services ({_services.Count})")">
+        @if (_services.Count == 0)
+        {
+            <div class="bdt-muted">No [Inject] properties.</div>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th>Property</th><th>Service</th><th>Lifetime</th><th>Implementation</th></tr></thead>
+                <tbody>
+                    @foreach (var s in _services)
+                    {
+                        <tr class="bdt-row" @onclick='() => Host.ShowPanel("services", s.ServiceName)'>
+                            <td class="bdt-mono">@s.Name</td>
+                            <td class="bdt-mono">@s.ServiceName</td>
+                            <td>@if (s.Lifetime is not null) { <span class="bdt-chip bdt-@s.Lifetime">@s.Lifetime</span> } else { <span class="bdt-muted">unknown</span> }</td>
+                            <td class="bdt-mono bdt-muted">@s.Implementation</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </InspectorSection>
+    <InspectorSection Title="@($"Rendering ({Record.RenderCount} renders, {Fmt.Ms(Record.TotalRenderMs)})")">
+        <dl class="bdt-kv">
+            <dt>Renders</dt><dd>@Record.RenderCount</dd>
+            <dt>Total / avg / max</dt><dd>@Fmt.Ms(Record.TotalRenderMs) / @Fmt.Ms(Record.RenderCount == 0 ? 0 : Record.TotalRenderMs / Record.RenderCount) / @Fmt.Ms(Record.MaxRenderMs)</dd>
+            <dt>Last render</dt><dd>@(Record.LastRenderAt is { } at ? Fmt.Time(at) + " (" + Fmt.Ago(at) + ")" : "never")</dd>
+            @if (_typeMetrics is not null)
+            {
+                <dt>SetParametersAsync</dt><dd>@_typeMetrics.ParameterUpdates calls, @Fmt.Ms(_typeMetrics.ParameterUpdateMs) total, max @Fmt.Ms(_typeMetrics.MaxParameterUpdateMs) <span class="bdt-muted">(per type, from framework metrics)</span></dd>
+            }
+        </dl>
+        @if (_causes.Count > 0)
+        {
+            <div style="margin:4px 0"><strong>Why did it render?</strong></div>
+            <table>
+                <thead><tr><th>Cause</th><th class="bdt-num">Count</th><th>Details</th></tr></thead>
+                <tbody>
+                    @foreach (var c in _causes)
+                    {
+                        <tr><td>@c.Cause</td><td class="bdt-num">@c.Count</td><td class="bdt-muted">@c.Detail</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+        <div style="margin:4px 0"><strong>Recent renders</strong> <span class="bdt-muted">(newest first, click to open in timeline)</span></div>
+        <table>
+            <thead><tr><th>Time</th><th class="bdt-num">Duration</th><th>Cause</th><th class="bdt-num">Batch</th></tr></thead>
+            <tbody>
+                @foreach (var r in _renders)
+                {
+                    <tr class="bdt-row @(r.Failed ? "bdt-sev-error" : "")" @onclick="() => Host.SelectEvent(r.EventId)">
+                        <td class="bdt-mono">@Fmt.Time(r.At)</td>
+                        <td class="bdt-num">@Fmt.Ms(r.DurationMs)</td>
+                        <td class="bdt-truncate" style="max-width:320px" title="@r.CauseDetail">@r.CauseDetail</td>
+                        <td class="bdt-num">#@r.BatchId</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </InspectorSection>
+    <InspectorSection Title="@($"Children ({_children.Count})")" Collapsed="true">
+        @if (_children.Count == 0)
+        {
+            <div class="bdt-muted">No child components.</div>
+        }
+        @foreach (var child in _children)
+        {
+            <div><a @onclick="() => Host.SelectComponent(child.InstanceId)" class="bdt-mono">@child.DisplayName</a> <span class="bdt-muted">@child.RenderCount renders · @Fmt.Ms(child.TotalRenderMs)</span></div>
+        }
+    </InspectorSection>
+    <InspectorSection Title="@($"Errors ({_errors.Count})")" Collapsed="@(_errors.Count == 0)">
+        @if (_errors.Count == 0)
+        {
+            <div class="bdt-muted">No errors recorded for this instance.</div>
+        }
+        @foreach (var e in _errors)
+        {
+            <div><a @onclick="() => Host.SelectError(e.Id)">@Fmt.Time(e.At) @e.ExceptionType: @e.Message</a> @(e.Count > 1 ? $"×{e.Count}" : "")</div>
+        }
+    </InspectorSection>
+</div>
+
+@code {
+    private sealed record MemberValue(string Name, object? Value, MemberInfo MemberInfo);
+
+    private sealed record ServiceRow(string Name, string ServiceName, string? Lifetime, string? Implementation);
+
+    private sealed record CauseRow(string Cause, int Count, string Detail);
+
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    [Parameter, EditorRequired] public ComponentRecord Record { get; set; } = default!;
+
+    private DevToolsSession Session => Host.Session;
+
+    private List<MemberValue> _parameters = [];
+    private List<MemberValue> _cascading = [];
+    private List<MemberValue> _state = [];
+    private List<ServiceRow> _services = [];
+    private List<CauseRow> _causes = [];
+    private List<ComponentRecord> _children = [];
+    private List<ErrorRecord> _errors = [];
+    private RenderSample[] _renders = [];
+    private LifecycleTypeMetrics? _typeMetrics;
+    private string _baseName = "";
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, (PropertyInfo[] Parameters, PropertyInfo[] Cascading, PropertyInfo[] Injected)> PropertyCache = new();
+
+    protected override void OnParametersSet()
+    {
+        var component = Record.Component;
+        _baseName = Record.Type.BaseType is { } b ? TypeNames.Short(b) : "–";
+        var (parameters, cascading, injected) = PropertyCache.GetOrAdd(Record.Type, static t =>
+        {
+            var all = t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+            return (
+                all.Where(p => p.IsDefined(typeof(ParameterAttribute), true)).OrderBy(p => p.Name).ToArray(),
+                all.Where(p => p.IsDefined(typeof(CascadingParameterAttribute), true) || p.IsDefined(typeof(SupplyParameterFromQueryAttribute), true) || p.IsDefined(typeof(SupplyParameterFromFormAttribute), true)).OrderBy(p => p.Name).ToArray(),
+                all.Where(p => p.IsDefined(typeof(InjectAttribute), true)).OrderBy(p => p.Name).ToArray());
+        });
+
+        _parameters = parameters.Select(p => new MemberValue(p.Name, SafeGet(p, component), p)).ToList();
+        _cascading = cascading.Select(p => new MemberValue(p.Name, SafeGet(p, component), p)).ToList();
+        _state = ComponentStateReader.Fields(Record.Type).Select(f => new MemberValue(f.Name, SafeGet(f.Field, component), f.Field)).ToList();
+        var graph = Host.Graph;
+        _services = injected.Select(p =>
+        {
+            var service = graph?.Services.LastOrDefault(s => s.ServiceType == p.PropertyType && !s.IsKeyed);
+            var value = SafeGet(p, component);
+            var impl = value is TrackingJSRuntime tracking ? TypeNames.Short(tracking.Inner.GetType()) + " (tracked by DevTools)" : value is null ? null : TypeNames.Short(value.GetType());
+            return new ServiceRow(p.Name, TypeNames.Short(p.PropertyType), service is null ? null : Fmt.Lifetime(service.Lifetime), impl ?? service?.ImplementationName);
+        }).ToList();
+
+        var renders = Record.Renders;
+        _renders = renders.Reverse().Take(50).ToArray();
+        _causes = renders.GroupBy(r => r.Cause).Select(g => new CauseRow(g.Key.ToString(), g.Count(), string.Join(" · ", g.Select(r => r.CauseDetail).Where(d => d is not null).Distinct().Take(3)))).OrderByDescending(c => c.Count).ToList();
+        _children = Session.Components.All.Where(c => !c.IsDisposed && !c.IsHidden && c.Parent is not null && NearestVisibleAncestor(c) == Record).OrderBy(c => c.ComponentId).ToList();
+        _errors = Session.Errors.Snapshot().Where(e => e.ComponentInstanceId == Record.InstanceId).Reverse().ToList();
+        Session.TypeMetrics.TryGetValue(Record.DisplayName, out _typeMetrics);
+    }
+
+    private static ComponentRecord? NearestVisibleAncestor(ComponentRecord record)
+    {
+        var parent = record.Parent;
+        while (parent is not null && parent.IsHidden)
+        {
+            parent = parent.Parent;
+        }
+
+        return parent;
+    }
+
+    private static object? SafeGet(PropertyInfo property, object target)
+    {
+        try
+        {
+            return property.GetValue(target);
+        }
+        catch (Exception ex)
+        {
+            return "«threw " + (ex is TargetInvocationException { InnerException: { } i } ? i.GetType().Name : ex.GetType().Name) + "»";
+        }
+    }
+
+    private static object? SafeGet(FieldInfo field, object target)
+    {
+        try
+        {
+            return field.GetValue(target);
+        }
+        catch (Exception ex)
+        {
+            return "«threw " + ex.GetType().Name + "»";
+        }
+    }
+}

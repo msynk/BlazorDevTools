@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazorDevTools</RootNamespace>
+    <Description>Runtime instrumentation and in-app DevTools UI for Blazor: component tree, render profiler, event timeline, state, network, JS interop, errors and diagnostics.</Description>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Reflection over Blazor internals is intentional and development-only; the library is not trim-safe. -->
+    <IsTrimmable>false</IsTrimmable>
+    <NoWarn>$(NoWarn);CS1591;IL2026;IL2070;IL2072;IL2075;IL2080;IL3050</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlazorDevTools.Abstractions\BlazorDevTools.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BlazorDevTools.Tests" />
+    <InternalsVisibleTo Include="BlazorDevTools.Server" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,102 @@
+@namespace BlazorDevTools
+@using BlazorDevTools.UI
+
+@if (Session.IsEnabled && _interactive)
+{
+    <div class="bdt-root" data-theme="@ThemeAttribute" @onkeydown="OnRootKeyDown">
+        <link rel="stylesheet" href="_content/BlazorDevTools/devtools.css" />
+        @if (!Ui.IsOpen)
+        {
+            if (Options.Ui.ShowBadge)
+            {
+                <div class="bdt-badge" role="button" tabindex="0" title="Open Blazor DevTools (@Options.Ui.ToggleShortcut)" @onclick="Toggle" @onkeydown:preventDefault="false">
+                    <span>⚙ DevTools</span>
+                    @if (Session.Errors.Count > 0)
+                    {
+                        <span class="bdt-pill bdt-chip bdt-err">@Session.Errors.Count</span>
+                    }
+                    @if (Session.Diagnostics.ActiveWarningsOrErrors > 0)
+                    {
+                        <span class="bdt-pill bdt-chip bdt-warn">⚠ @Session.Diagnostics.ActiveWarningsOrErrors</span>
+                    }
+                </div>
+            }
+        }
+        else
+        {
+            <CascadingValue Value="this" IsFixed="true">
+                <div class="@PanelClass">
+                    <div class="bdt-header">
+                        <span class="bdt-title">Blazor DevTools</span>
+                        <div class="bdt-tabs" role="tablist">
+                            @foreach (var (id, title) in BuiltInPanels)
+                            {
+                                <button type="button" role="tab" class="bdt-tab @(Ui.ActivePanelId == id ? "bdt-active" : "")" @onclick="() => ShowPanel(id)">
+                                    @title
+                                    @if (id == "errors" && Session.Errors.Count > 0)
+                                    {
+                                        <span class="bdt-count bdt-err">@Session.Errors.Count</span>
+                                    }
+                                    else if (id == "diagnostics" && Session.Diagnostics.ActiveWarningsOrErrors > 0)
+                                    {
+                                        <span class="bdt-count bdt-warn">@Session.Diagnostics.ActiveWarningsOrErrors</span>
+                                    }
+                                    else if (id == "network" && Session.Http.FailedCount > 0)
+                                    {
+                                        <span class="bdt-count bdt-err">@Session.Http.FailedCount</span>
+                                    }
+                                </button>
+                            }
+                            @foreach (var panel in ExtensionPanels)
+                            {
+                                <button type="button" role="tab" class="bdt-tab @(Ui.ActivePanelId == panel.Id ? "bdt-active" : "")" @onclick="() => ShowPanel(panel.Id)">@panel.Title</button>
+                            }
+                        </div>
+                        <div class="bdt-tools">
+                            <button type="button" title="Search or run a command (Ctrl+K)" @onclick="() => OpenPalette()">🔍 Search / &gt; command</button>
+                            <button type="button" title="Theme: @Ui.Theme" @onclick="SetTheme">◐</button>
+                            <button type="button" title="Dock: @Ui.Dock" @onclick="SetDock">@(Ui.Dock == DevToolsDock.Bottom ? "▭" : "▯")</button>
+                            <button type="button" title="Size: @Ui.Size" @onclick="SetSize">⤢</button>
+                            <button type="button" title="Close (@Options.Ui.ToggleShortcut)" @onclick="Toggle">✕</button>
+                        </div>
+                    </div>
+                    <div class="bdt-body" style="position: relative;">
+                        @switch (Ui.ActivePanelId)
+                        {
+                            case "components": <ComponentsPanel /> break;
+                            case "profiler": <ProfilerPanel /> break;
+                            case "timeline": <TimelinePanel /> break;
+                            case "state": <StatePanel /> break;
+                            case "network": <NetworkPanel /> break;
+                            case "interop": <InteropPanel /> break;
+                            case "errors": <ErrorsPanel /> break;
+                            case "services": <ServicesPanel /> break;
+                            case "diagnostics": <DiagnosticsPanel /> break;
+                            case "browser": <BrowserPanel /> break;
+                            case "about": <AboutPanel /> break;
+                            default:
+                                var extension = ExtensionPanels.FirstOrDefault(p => p.Id == Ui.ActivePanelId);
+                                if (extension is not null)
+                                {
+                                    <div class="bdt-scroll" style="flex:1"><DynamicComponent Type="extension.ComponentType" /></div>
+                                }
+                                else
+                                {
+                                    <div class="bdt-empty">Unknown panel "@Ui.ActivePanelId".</div>
+                                }
+                                break;
+                        }
+                        @if (Ui.CommandPaletteOpen)
+                        {
+                            <CommandPalette Initial="@_searchText" />
+                        }
+                        @if (Ui.Notification is not null && DateTimeOffset.UtcNow - Ui.NotificationAt < TimeSpan.FromSeconds(4))
+                        {
+                            <div class="bdt-notification">@Ui.Notification</div>
+                        }
+                    </div>
+                </div>
+            </CascadingValue>
+        }
+    </div>
+}

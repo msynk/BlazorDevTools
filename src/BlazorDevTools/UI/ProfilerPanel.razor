@@ -1,0 +1,145 @@
+@namespace BlazorDevTools.UI
+@using BlazorDevTools.Instrumentation
+
+<div class="bdt-split">
+    <div class="bdt-left" style="flex-basis:62%">
+        <div class="bdt-toolbar">
+            <input type="text" placeholder='Filter: name, "renders>20", "sort:max|total|renders|avg|last"' value="@Query" @oninput="OnQuery" />
+            <label><input type="checkbox" checked="@_includeDisposed" @onchange='e => { _includeDisposed = e.Value is true; }' /> disposed</label>
+            <span class="bdt-muted bdt-nowrap">@_rows.Count components · @Session.RenderTracker.BatchCount batches</span>
+        </div>
+        <div class="bdt-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="bdt-sortable" @onclick='() => Sort("name")'>Component</th>
+                        <th class="bdt-num bdt-sortable" @onclick='() => Sort("renders")'>Renders</th>
+                        <th class="bdt-num bdt-sortable" @onclick='() => Sort("total")'>Total</th>
+                        <th class="bdt-num bdt-sortable" @onclick='() => Sort("avg")'>Avg</th>
+                        <th class="bdt-num bdt-sortable" @onclick='() => Sort("max")'>Max</th>
+                        <th class="bdt-num bdt-sortable" @onclick='() => Sort("last")'>Last</th>
+                        <th>Last cause</th>
+                        <th style="width:120px"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="_rows" ItemSize="23" Context="r">
+                        <tr class="bdt-row @(Ui.SelectedComponentId == r.InstanceId ? "bdt-selected" : "")" @onclick="() => Host.SelectComponent(r.InstanceId)">
+                            <td class="bdt-mono bdt-truncate" style="max-width:220px" title="@r.TypeName">@r.DisplayName @(r.IsDisposed ? "†" : "")</td>
+                            <td class="bdt-num">@r.RenderCount</td>
+                            <td class="bdt-num">@Fmt.Ms(r.TotalRenderMs)</td>
+                            <td class="bdt-num">@Fmt.Ms(r.AverageRenderMs)</td>
+                            <td class="bdt-num @(r.MaxRenderMs >= Session.Options.Diagnostics.SlowRenderMs ? "bdt-err" : "")">@Fmt.Ms(r.MaxRenderMs)</td>
+                            <td class="bdt-num">@Fmt.Ms(r.LastRenderMs)</td>
+                            <td class="bdt-truncate bdt-muted" style="max-width:260px" title="@r.LastCause">@r.LastCause</td>
+                            <td><span class="bdt-bar" style="width:@(Math.Max(1, 110 * r.TotalRenderMs / Math.Max(0.001, _maxTotal)))px"></span></td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+            @if (_rows.Count == 0)
+            {
+                <div class="bdt-empty">No renders captured yet.</div>
+            }
+        </div>
+    </div>
+    <div class="bdt-right">
+        <div class="bdt-section">
+            <div class="bdt-section-title">Recent render batches <span class="bdt-muted" style="font-weight:normal">(one batch = one DOM diff; click to open)</span></div>
+            <div class="bdt-section-body">
+                <table>
+                    <thead><tr><th>Time</th><th>Batch</th><th class="bdt-num">Components</th><th class="bdt-num">Build</th><th>Diff</th><th>Trigger</th></tr></thead>
+                    <tbody>
+                        @foreach (var b in _batches)
+                        {
+                            <tr class="bdt-row @(b.Severity == DevToolsSeverity.Warning ? "bdt-sev-warning" : "")" @onclick="() => Host.SelectEvent(b.Id)">
+                                <td class="bdt-mono">@Fmt.Time(b.Timestamp)</td>
+                                <td>@b.Title</td>
+                                <td class="bdt-num">@(b.Data?["count"] ?? "…")</td>
+                                <td class="bdt-num">@Fmt.Ms(b.DurationMs)</td>
+                                <td class="bdt-muted bdt-truncate" style="max-width:200px">@(b.Detail?.Contains("diffing") == true ? b.Detail[(b.Detail.IndexOf("building") + 10)..] : "–")</td>
+                                <td class="bdt-truncate" style="max-width:200px">@(b.ParentEventId is { } p ? Session.Timeline.Find(p)?.Title : "")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="bdt-section">
+            <div class="bdt-section-title">Lifecycle cost per type <span class="bdt-muted" style="font-weight:normal">(SetParametersAsync incl. OnInitialized/OnParametersSet; .NET 10 metrics)</span></div>
+            <div class="bdt-section-body">
+                @if (_typeMetrics.Length == 0)
+                {
+                    <div class="bdt-muted">@(ActivityObserver.LifecycleMetricsObserved ? "Nothing measured yet." : "Not observed on this host. Requires .NET 10 components metrics (IMeterFactory registered).")</div>
+                }
+                else
+                {
+                    <table>
+                        <thead><tr><th>Type</th><th class="bdt-num">Param updates</th><th class="bdt-num">Total</th><th class="bdt-num">Max</th><th class="bdt-num">Events</th><th class="bdt-num">Event time</th></tr></thead>
+                        <tbody>
+                            @foreach (var m in _typeMetrics)
+                            {
+                                <tr><td class="bdt-mono">@m.TypeName</td><td class="bdt-num">@m.ParameterUpdates</td><td class="bdt-num">@Fmt.Ms(m.ParameterUpdateMs)</td><td class="bdt-num">@Fmt.Ms(m.MaxParameterUpdateMs)</td><td class="bdt-num">@m.EventHandlers</td><td class="bdt-num">@Fmt.Ms(m.EventHandlerMs)</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private sealed record Row(long InstanceId, string DisplayName, string TypeName, int RenderCount, double TotalRenderMs, double AverageRenderMs, double MaxRenderMs, double LastRenderMs, string? LastCause, bool IsDisposed);
+
+    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
+
+    private DevToolsSession Session => Host.Session;
+
+    private DevToolsUiState Ui => Host.Ui;
+
+    private string? Query => Ui.GetQuery("profiler");
+
+    private List<Row> _rows = [];
+    private DevToolsEvent[] _batches = [];
+    private LifecycleTypeMetrics[] _typeMetrics = [];
+    private double _maxTotal;
+    private bool _includeDisposed;
+    private string _sort = "total";
+
+    protected override void OnParametersSet()
+    {
+        var filter = QueryFilter.Parse(Query);
+        var sort = filter.Token("sort") ?? _sort;
+        var minRenders = filter.IntToken("renders>") ?? 0;
+        var rows = Session.Components.All
+            .Where(c => !c.IsDevTools && !c.IsHidden && c.RenderCount > 0 && (_includeDisposed || !c.IsDisposed) && c.RenderCount > minRenders)
+            .Where(c => filter.MatchesText(c.DisplayName, c.TypeName))
+            .Select(c => new Row(c.InstanceId, c.DisplayName, c.TypeName, c.RenderCount, c.TotalRenderMs, c.TotalRenderMs / c.RenderCount, c.MaxRenderMs, c.LastRenderMs, c.LastRender?.CauseDetail, c.IsDisposed));
+        rows = sort switch
+        {
+            "name" => rows.OrderBy(r => r.DisplayName),
+            "renders" => rows.OrderByDescending(r => r.RenderCount),
+            "avg" => rows.OrderByDescending(r => r.AverageRenderMs),
+            "max" => rows.OrderByDescending(r => r.MaxRenderMs),
+            "last" => rows.OrderByDescending(r => r.LastRenderMs),
+            _ => rows.OrderByDescending(r => r.TotalRenderMs),
+        };
+        _rows = rows.ToList();
+        _maxTotal = _rows.Count == 0 ? 0 : _rows.Max(r => r.TotalRenderMs);
+        _batches = Session.Timeline.Snapshot().Where(e => e.Kind == DevToolsEventKind.RenderBatch).Reverse().Take(25).ToArray();
+        _typeMetrics = Session.TypeMetrics.Values.OrderByDescending(m => m.ParameterUpdateMs + m.EventHandlerMs).Take(30).ToArray();
+    }
+
+    private void OnQuery(ChangeEventArgs e) => Ui.SetQuery("profiler", e.Value?.ToString());
+
+    private void Sort(string key)
+    {
+        _sort = key;
+        var filter = QueryFilter.Parse(Query);
+        if (filter.Tokens.ContainsKey("sort"))
+        {
+            Ui.SetQuery("profiler", string.Join(' ', (Query ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(p => !p.StartsWith("sort:", StringComparison.OrdinalIgnoreCase))));
+        }
+    }
+}
