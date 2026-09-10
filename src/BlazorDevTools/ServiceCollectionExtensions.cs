@@ -1,52 +1,68 @@
+using BlazorDevTools;
 using BlazorDevTools.Events;
 using BlazorDevTools.Extensions;
 using BlazorDevTools.Instrumentation;
 using BlazorDevTools.Session;
 using BlazorDevTools.State;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
 
-namespace BlazorDevTools;
+// Registration lives in the conventional DI namespace so applications do not need an extra using directive:
+// Microsoft.Extensions.DependencyInjection is an implicit using in every web and WebAssembly project.
+namespace Microsoft.Extensions.DependencyInjection;
 
-public static class ServiceCollectionExtensions
+public static class BlazorDevToolsServiceCollectionExtensions
 {
     /// <summary>
     /// Registers Blazor DevTools. Enabled only in Development unless <see cref="DevToolsOptions.Enabled"/> is set.
     /// Place <c>&lt;DevToolsPanel /&gt;</c> inside an interactive component (typically the layout) to show the UI.
+    /// <para>
+    /// Calling this more than once (for example <c>AddBlazorDevTools()</c> and then <c>AddBlazorDevToolsServer()</c>)
+    /// applies the additional configuration to the existing options instead of being ignored.
+    /// </para>
     /// </summary>
     public static IServiceCollection AddBlazorDevTools(this IServiceCollection services, Action<DevToolsOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // Second and later calls configure the options that are already registered, so extensions and thresholds
+        // contributed by different packages accumulate instead of silently overwriting each other.
+        if (services.FirstOrDefault(d => d.ServiceType == typeof(DevToolsOptions))?.ImplementationInstance is DevToolsOptions existing)
+        {
+            configure?.Invoke(existing);
+            return services;
+        }
+
         var options = new DevToolsOptions();
         configure?.Invoke(options);
-        var enabled = options.Enabled ?? IsDevelopment(services);
+        var (enabled, reason) = ResolveEnabled(services, options);
+        options.ResolvedEnabled = enabled;
 
-        if (services.Any(d => d.ServiceType == typeof(DevToolsRegistry)))
-        {
-            // Already registered: only merge extensions from a second call.
-            return services;
-        }
-
-        var registry = new DevToolsRegistry(options, enabled, services);
         services.AddSingleton(options);
-        services.AddSingleton(registry);
-
-        if (!enabled)
-        {
-            services.AddScoped<DevToolsSession>();
-            services.AddScoped<IDevToolsTimeline>(sp => sp.GetRequiredService<DevToolsSession>().TimelineApi);
-            services.AddScoped<IStateProviderRegistry>(sp => sp.GetRequiredService<DevToolsSession>().StateProviders);
-            return services;
-        }
+        services.AddSingleton(sp => new DevToolsRegistry(options, enabled, reason, services));
 
         services.AddScoped<DevToolsSession>();
         services.AddScoped<IDevToolsTimeline>(sp => sp.GetRequiredService<DevToolsSession>().TimelineApi);
         services.AddScoped<IStateProviderRegistry>(sp => sp.GetRequiredService<DevToolsSession>().StateProviders);
+
+        if (!enabled)
+        {
+            return services;
+        }
+
+        // The framework only registers its own ActivitySource/meters for server-side rendering. Registering them here
+        // is what makes "why did this render?" work in WebAssembly and in any other host; both calls are public,
+        // idempotent, and produce no measurable cost while nothing listens.
+        if (options.UseFrameworkInstrumentation)
+        {
+            ComponentsMetricsServiceCollectionExtensions.AddComponentsTracing(services);
+            ComponentsMetricsServiceCollectionExtensions.AddComponentsMetrics(services);
+        }
 
         WrapExistingActivator(services);
         services.AddScoped<IComponentActivator, DevToolsComponentActivator>();
@@ -57,7 +73,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>Registers an extension. Must be called before <see cref="AddBlazorDevTools"/> takes effect, i.e. pass it through options instead when possible.</summary>
+    /// <summary>Registers an extension. Safe to combine with other <c>AddBlazorDevTools</c> calls.</summary>
     public static IServiceCollection AddBlazorDevToolsExtension<TExtension>(this IServiceCollection services, Action<DevToolsOptions>? configure = null) where TExtension : IDevToolsExtension, new()
         => services.AddBlazorDevTools(o =>
         {
@@ -110,27 +126,48 @@ public static class ServiceCollectionExtensions
         services.Add(holder);
     }
 
-    private static bool IsDevelopment(IServiceCollection services)
+    /// <summary>
+    /// Decides whether DevTools runs, and records why. The reason is shown in the About panel so a developer who
+    /// expected DevTools and does not see it can tell immediately what the host reported.
+    /// </summary>
+    private static (bool Enabled, string Reason) ResolveEnabled(IServiceCollection services, DevToolsOptions options)
     {
+        if (options.Enabled is { } explicitValue)
+        {
+            return (explicitValue, "DevToolsOptions.Enabled was set to " + explicitValue.ToString().ToLowerInvariant() + ".");
+        }
+
         foreach (var descriptor in services)
         {
-            if (descriptor.ServiceType == typeof(IHostEnvironment) && descriptor.ImplementationInstance is IHostEnvironment env)
+            if (descriptor.ImplementationInstance is null)
             {
-                return env.IsDevelopment();
+                continue;
             }
 
-            if (descriptor.ServiceType.FullName == "Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment" && descriptor.ImplementationInstance is { } wasmEnv)
+            if (descriptor.ServiceType == typeof(IHostEnvironment) && descriptor.ImplementationInstance is IHostEnvironment env)
             {
-                var environment = wasmEnv.GetType().GetProperty("Environment")?.GetValue(wasmEnv) as string;
-                return string.Equals(environment, "Development", StringComparison.OrdinalIgnoreCase);
+                return (env.IsDevelopment(), $"IHostEnvironment reports environment '{env.EnvironmentName}'.");
+            }
+
+            if (descriptor.ServiceType.FullName == "Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment")
+            {
+                var wasm = descriptor.ImplementationInstance;
+                var environment = wasm.GetType().GetProperty("Environment")?.GetValue(wasm) as string;
+                return (string.Equals(environment, "Development", StringComparison.OrdinalIgnoreCase),
+                    $"IWebAssemblyHostEnvironment reports environment '{environment ?? "unknown"}'.");
             }
         }
 
-        // No environment information (tests, custom hosts): stay off unless explicitly enabled.
-        return false;
+        var variable = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        if (!string.IsNullOrEmpty(variable))
+        {
+            return (string.Equals(variable, "Development", StringComparison.OrdinalIgnoreCase), $"Environment variable reports '{variable}'.");
+        }
+
+        return (false, "No host environment information was available at registration time, so DevTools stayed off. Set DevToolsOptions.Enabled explicitly.");
     }
 
-    private sealed class DelegateStateProvider<TService> : IStateProvider where TService : class
+    private sealed class DelegateStateProvider<TService> : IStateProvider, IDisposable where TService : class
     {
         private readonly TService _service;
         private readonly Func<TService, object?> _snapshot;
@@ -140,14 +177,28 @@ public static class ServiceCollectionExtensions
             _service = service;
             _snapshot = snapshot;
             Name = name;
-            subscribe?.Invoke(service, () => Changed?.Invoke(StateChangeInfo.Empty));
+            subscribe?.Invoke(service, Raise);
         }
 
         public string Name { get; }
 
-        public string? Description => Model.TypeNames.Short(typeof(TService));
+        public string? Description => BlazorDevTools.Model.TypeNames.Short(typeof(TService));
 
-        public object? GetSnapshot() => _snapshot(_service);
+        public object? GetSnapshot() => IsDisposed ? null : _snapshot(_service);
+
+        private bool IsDisposed { get; set; }
+
+        private void Raise()
+        {
+            if (!IsDisposed)
+            {
+                Changed?.Invoke(StateChangeInfo.Empty);
+            }
+        }
+
+        // The subscription lives in the application service, which may outlive this scope (a singleton store observed
+        // from a circuit). Disposal cannot unhook an arbitrary callback, so the adapter goes inert instead.
+        public void Dispose() => IsDisposed = true;
 
         public event Action<StateChangeInfo>? Changed;
     }

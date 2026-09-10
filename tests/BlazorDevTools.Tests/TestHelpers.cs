@@ -101,11 +101,14 @@ public sealed class FakeJSRuntime : IJSRuntime
 
     public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) => InvokeAsync<TValue>(identifier, CancellationToken.None, args);
 
+    public object?[]? LastArgs { get; private set; }
+
     public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args)
     {
         Calls.Add(identifier);
+        LastArgs = args;
         var result = Handler(identifier, args);
-        return ValueTask.FromResult((TValue)result!);
+        return ValueTask.FromResult(result is TValue typed ? typed : default!);
     }
 }
 

@@ -27,10 +27,6 @@
                     </tbody>
                 </table>
             }
-            @if (Session.Browser.UntrackedDotNetToJsCalls > 0)
-            {
-                <div class="bdt-empty">@Session.Browser.UntrackedDotNetToJsCalls .NET→JS calls were seen by the browser but not attributed (made from services or framework internals).</div>
-            }
         </div>
     </div>
     <div class="bdt-right">

@@ -29,8 +29,6 @@ public sealed class CircuitInfo
 
     public int Errors { get; internal set; }
 
-    public string? UserAgent { get; internal set; }
-
     public bool IsClosed => ClosedAt is not null;
 
     public TimeSpan Duration => (ClosedAt ?? DateTimeOffset.UtcNow) - OpenedAt;

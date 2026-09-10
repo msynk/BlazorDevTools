@@ -7,7 +7,6 @@ let dotnetRef = null;
 let shortcut = null;
 let jsToDotNetBatch = [];
 let flushTimer = null;
-let untrackedDotNetToJs = 0;
 let originalInvokeAsync = null;
 let originalInvoke = null;
 const listeners = [];
@@ -46,12 +45,10 @@ function scheduleFlush() {
     if (flushTimer) return;
     flushTimer = setTimeout(() => {
         flushTimer = null;
-        if (jsToDotNetBatch.length === 0 && untrackedDotNetToJs === 0) return;
+        if (jsToDotNetBatch.length === 0) return;
         const batch = jsToDotNetBatch;
         jsToDotNetBatch = [];
-        const untracked = untrackedDotNetToJs;
-        untrackedDotNetToJs = 0;
-        report("ReportJsToDotNet", batch, untracked);
+        report("ReportJsToDotNet", batch);
     }, 500);
 }
 
@@ -195,17 +192,35 @@ export function refresh() {
     return snapshot();
 }
 
-export function getStorage(kind) {
+const REDACTED = "«redacted»";
+
+// A JSON Web Token is a credential whatever key it is stored under, and "user"/"profile"/"session" are far more
+// common key names for one than "token" is.
+function looksLikeSecret(value) {
+    if (/^ey[A-Za-z0-9_-]{6,}.[A-Za-z0-9_-]{6,}./.test(value)) return true;
+    return /("(access|id|refresh|bearer)_?token"|"authorization")s*:/i.test(value);
+}
+
+export function getStorage(kind, sensitivePatterns) {
     const storage = kind === "session" ? window.sessionStorage : window.localStorage;
+    const patterns = (sensitivePatterns || []).map(p => String(p).toLowerCase());
     const result = [];
     try {
         for (let i = 0; i < storage.length; i++) {
             const key = storage.key(i);
             const value = storage.getItem(key) || "";
-            result.push({ key, size: value.length, preview: value.length > 120 ? value.slice(0, 120) + "…" : value });
+            const lowerKey = (key || "").toLowerCase();
+            // Redaction happens before the value leaves the browser: DevTools never holds the plaintext.
+            const sensitive = patterns.some(p => lowerKey.includes(p)) || looksLikeSecret(value);
+            result.push({
+                key,
+                size: value.length,
+                preview: sensitive ? REDACTED : (value.length > 120 ? value.slice(0, 120) + "…" : value),
+                redacted: sensitive,
+            });
         }
     } catch (err) {
-        result.push({ key: "(error)", size: 0, preview: String(err) });
+        result.push({ key: "(error)", size: 0, preview: String(err), redacted: false });
     }
     return result;
 }
@@ -223,12 +238,4 @@ export function copyText(text) {
         return navigator.clipboard.writeText(text).then(() => true, () => false);
     }
     return false;
-}
-
-export function focusElement(element) {
-    if (element && element.focus) element.focus();
-}
-
-export function scrollIntoView(element) {
-    if (element && element.scrollIntoView) element.scrollIntoView({ block: "nearest" });
 }

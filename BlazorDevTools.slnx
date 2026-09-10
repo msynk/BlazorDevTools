@@ -10,6 +10,7 @@
     <Project Path="src/BlazorDevTools/BlazorDevTools.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/BlazorDevTools.Benchmarks/BlazorDevTools.Benchmarks.csproj" />
     <Project Path="tests/BlazorDevTools.Tests/BlazorDevTools.Tests.csproj" />
   </Folder>
 </Solution>

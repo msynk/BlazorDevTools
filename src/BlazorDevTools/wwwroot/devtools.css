@@ -244,3 +244,4 @@
 .bdt-stat { background: var(--bdt-bg2); border: 1px solid var(--bdt-border); border-radius: 4px; padding: 6px 8px; }
 .bdt-stat .bdt-stat-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .bdt-stat .bdt-stat-label { color: var(--bdt-fg2); font-size: 11px; }
+.bdt-panel-host { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }

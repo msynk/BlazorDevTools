@@ -53,9 +53,9 @@
                         <dd>@if (_preceding is { } p) { <a @onclick="() => Host.SelectEvent(p.Id)"><span class="@Fmt.KindClass(p.Kind)">@Fmt.KindLabel(p.Kind)</span> @p.Title ↗</a> } else { <span class="bdt-muted">no UI event recorded before this error</span> }</dd>
                         <dt>Timeline</dt><dd><a @onclick="() => Host.SelectEvent(s.TimelineEventId)">open ↗</a></dd>
                     </dl>
-                    @if (s.Exception?.InnerException is { } inner)
+                    @if (s.InnerError is { } inner)
                     {
-                        <div style="margin-top:6px"><strong>Inner:</strong> <span class="bdt-mono">@inner.GetType().Name</span>: @inner.Message</div>
+                        <div style="margin-top:6px"><strong>Inner:</strong> <span class="bdt-mono">@inner</span></div>
                     }
                     @if (s.StackTrace is not null)
                     {

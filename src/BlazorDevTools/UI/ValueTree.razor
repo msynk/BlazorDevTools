@@ -17,12 +17,18 @@
     [Parameter] public System.Reflection.MemberInfo? Member { get; set; }
 
     private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<InspectedNode>> _children = new(StringComparer.Ordinal);
     private object? _lastRoot;
 
     private InspectedNode Node => Inspector.Describe(Name, Root, "", Member);
 
     protected override void OnParametersSet()
     {
+        // Resolving a child path walks the object graph from the root again, evaluating a property getter per step.
+        // The panel re-renders several times a second, so without a per-pass cache an expanded tree would call
+        // application getters continuously - work the application never asked for, on values it may compute lazily.
+        _children.Clear();
+
         if (!ReferenceEquals(_lastRoot, Root))
         {
             _lastRoot = Root;
@@ -59,15 +65,27 @@
         }
         if (open && node.IsExpandable)
         {
-            foreach (var child in Inspector.Children(Root, node.Path))
+            foreach (var child in ChildrenOf(node.Path))
             {
                 @Render((child, ChildrenOnly ? depth : depth + 1))
             }
         }
     };
 
+    private IReadOnlyList<InspectedNode> ChildrenOf(string path)
+    {
+        if (!_children.TryGetValue(path, out var children))
+        {
+            children = Inspector.Children(Root, path);
+            _children[path] = children;
+        }
+
+        return children;
+    }
+
     private void Toggle(string path)
     {
+        _children.Clear();
         if (!_expanded.Remove(path))
         {
             _expanded.Add(path);

@@ -61,10 +61,32 @@ public class DevToolsEvent
     /// <summary>Stable identifier of the component instance this event relates to, when known.</summary>
     public long? ComponentInstanceId { get; init; }
 
-    public string? ComponentName { get; init; }
+    /// <summary>
+    /// Component type this event belongs to. Settable because some sources only publish it when the activity ends
+    /// (the framework tags its HandleEvent activity on stop, not on start).
+    /// </summary>
+    public string? ComponentName { get; set; }
 
     /// <summary>Small bag of structured data. Values are inspected lazily by the UI; keep them small.</summary>
     public IReadOnlyDictionary<string, object?>? Data { get; init; }
+
+    /// <summary>
+    /// Reads one entry of <see cref="Data"/>. Use this rather than the indexer: an event recorded while an activity
+    /// is still in progress does not yet carry every key, and a rule or panel must not throw over a missing one.
+    /// </summary>
+    public bool TryGetData(string key, out object? value)
+    {
+        if (Data is not null)
+        {
+            return Data.TryGetValue(key, out value);
+        }
+
+        value = null;
+        return false;
+    }
+
+    /// <summary>Reads one entry of <see cref="Data"/> as a string, or null when it is absent.</summary>
+    public string? DataString(string key) => TryGetData(key, out var value) ? value?.ToString() : null;
 
     public override string ToString() => $"[{Kind}] {Title}";
 }

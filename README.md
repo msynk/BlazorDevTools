@@ -16,6 +16,12 @@ dotnet add package BlazorDevTools.Server   # adds circuit instrumentation for Bl
 builder.Services.AddBlazorDevToolsServer();   // or AddBlazorDevTools() in WebAssembly / other hosts
 ```
 
+In an **Interactive Auto** solution, call `AddBlazorDevToolsServer()` in the server project and
+`AddBlazorDevTools()` in the `.Client` project, so DevTools works whichever render mode the page ends up in.
+In **Blazor WebAssembly**, add `<MetricsSupport>true</MetricsSupport>` to the project if you want render-diff and
+lifecycle timings: the WebAssembly SDK compiles `System.Diagnostics.Metrics` out by default. The About panel says so
+when it is missing, and everything else still works without it.
+
 ```razor
 @* MainLayout.razor (or any interactive component) *@
 <DevToolsPanel />
@@ -57,10 +63,14 @@ How the information is obtained, in short:
   (public `ComponentState` since .NET 8). Every accessor is optional; when a member is missing the capability is reported
   as unavailable instead of crashing.
 * **UI events, navigation, lifecycle and diff timings**: the framework's own `Microsoft.AspNetCore.Components`
-  ActivitySource and meters (.NET 10).
+  ActivitySource and meters (.NET 10). `AddBlazorDevTools` registers them through the public
+  `ComponentsMetricsServiceCollectionExtensions.AddComponentsTracing/AddComponentsMetrics`, because outside
+  server-side rendering the framework does not register them itself — without that, WebAssembly could not answer
+  *why did this render?* at all. Turn it off with `options.UseFrameworkInstrumentation = false`.
 * **HTTP**: `IHttpMessageHandlerBuilderFilter` (all `IHttpClientFactory` clients). Bodies are never captured.
-* **JS interop**: `IJSRuntime` injected into components is wrapped before the first render; `IJSRuntime` is *not*
-  decorated in DI because the framework casts it to its concrete type.
+* **JS interop**: `IJSRuntime` injected into components is wrapped on the first render (calls made earlier, from
+  `OnInitialized`, are not attributed); `IJSRuntime` is *not* decorated in DI because the framework casts it to its
+  concrete type.
 * **Errors**: render wrapper + Blazor's own logger categories + browser `error`/`unhandledrejection`.
 * **Circuits**: `CircuitHandler` (lifecycle, connection state, inbound message processing time) +
   `components:reconnect-state-changed` in the browser.
@@ -103,8 +113,10 @@ src/BlazorDevTools                instrumentation, session stores, diagnostics, 
 src/BlazorDevTools.Server         circuit handler, circuit registry, Circuit panel (reference extension)
 samples/DevToolsDemo              Blazor Web App (Interactive Auto) with a "Problems to diagnose" index
 tests/BlazorDevTools.Tests        xunit + bUnit: instrumentation, tree, rendering, timeline, state, network, interop,
-                                  diagnostics, DI graph, concurrency, overhead, memory bounds
-docs/                             capability matrix, architecture
+                                  diagnostics, DI graph, concurrency, overhead, memory bounds, scale, panel interaction,
+                                  framework-diagnostics attribution, extensibility
+tests/BlazorDevTools.Benchmarks   reproducible overhead measurement (dotnet run -c Release)
+docs/                             capability matrix, architecture, performance
 ```
 
 Run the demo: `dotnet run --project samples/DevToolsDemo/DevToolsDemo`, then open `/problems`.

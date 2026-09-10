@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
@@ -52,14 +53,19 @@ public sealed class ObjectInspector
         _maxDepth = Math.Max(1, options.MaxInspectionDepth);
     }
 
-    public InspectedNode Describe(string name, object? value, string path = "", MemberInfo? member = null)
+    public InspectedNode Describe(string name, object? value, string path = "", MemberInfo? member = null) => Describe(name, value, path, member, null);
+
+    private InspectedNode Describe(string name, object? value, string path, MemberInfo? member, List<object>? ancestors)
     {
-        if (member is not null && _redactor.IsSensitive(member) || member is null && _redactor.IsSensitiveName(name) && value is string)
+        // A sensitive name hides the value whatever its type: a token can be a byte[], a char[] or a custom struct
+        // just as easily as a string, and over-redaction is the safe direction for a security control.
+        var sensitive = member is not null ? _redactor.IsSensitive(member) : _redactor.IsSensitiveName(name);
+        if (sensitive)
         {
             return new InspectedNode(name, value?.GetType() is { } rt ? Model.TypeNames.Short(rt) : null, Redactor.RedactedValue, NodeKind.Redacted, path, false);
         }
 
-        return DescribeCore(name, value, path, ancestors: null);
+        return DescribeCore(name, value, path, ancestors);
     }
 
     /// <summary>Resolves the children of the node at <paramref name="path"/> relative to <paramref name="root"/>.</summary>
@@ -267,6 +273,7 @@ public sealed class ObjectInspector
             JsonElement je => je.ValueKind == JsonValueKind.String ? Quote(je.GetString() ?? "") : je.ToString(),
             ElementReference er => "ElementReference " + (string.IsNullOrEmpty(er.Id) ? "(unset)" : er.Id),
             IJSObjectReference => "IJSObjectReference",
+            System.Linq.IQueryable q => "IQueryable<" + Model.TypeNames.Short(q.ElementType) + "> (not enumerated: evaluating it would run the query)",
             IJSRuntime => "IJSRuntime",
             IServiceProvider => "IServiceProvider",
             CancellationToken ct => "CancellationToken (" + (ct.IsCancellationRequested ? "cancelled" : "active") + ")",
@@ -296,9 +303,9 @@ public sealed class ObjectInspector
         }
 
         var toStringDeclaringType = type.GetMethod("ToString", Type.EmptyTypes)?.DeclaringType;
-        if (toStringDeclaringType is not null && toStringDeclaringType != typeof(object) && toStringDeclaringType != typeof(ValueType))
+        if (toStringDeclaringType is not null && toStringDeclaringType != typeof(object) && toStringDeclaringType != typeof(ValueType) && !HasSensitiveMember(type))
         {
-            // records and user ToString overrides can leak sensitive members; show them only when short.
+            // records and user ToString overrides print every member; show them only when short and clean.
             var str = SafeToString(value);
             if (str.Length <= 120 && !_redactor.IsSensitiveName(str))
             {
@@ -307,6 +314,20 @@ public sealed class ObjectInspector
         }
 
         return Model.TypeNames.Short(type);
+    }
+
+    /// <summary>True when any member of the type would be redacted, in which case its ToString must not be shown.</summary>
+    private bool HasSensitiveMember(Type type)
+    {
+        foreach (var member in GetMembers(type))
+        {
+            if (_redactor.IsSensitive(member))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string SafeToString(object value)
@@ -480,18 +501,22 @@ public sealed class ObjectInspector
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         var ancestors = new List<object>();
-        FlattenInto(result, "", root, 0, maxDepth, maxItems, maxEntries, ancestors, null);
+        var deadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * FlattenBudgetSeconds);
+        FlattenInto(result, "", root, 0, maxDepth, maxItems, maxEntries, ancestors, null, deadline);
         return result;
     }
 
-    private void FlattenInto(Dictionary<string, string> result, string path, object? value, int depth, int maxDepth, int maxItems, int maxEntries, List<object> ancestors, MemberInfo? member)
+    /// <summary>Wall-clock budget for one Flatten pass. Application getters can be arbitrarily slow; inspection must not be.</summary>
+    private const double FlattenBudgetSeconds = 0.05;
+
+    private void FlattenInto(Dictionary<string, string> result, string path, object? value, int depth, int maxDepth, int maxItems, int maxEntries, List<object> ancestors, MemberInfo? member, long deadline)
     {
-        if (result.Count >= maxEntries)
+        if (result.Count >= maxEntries || Stopwatch.GetTimestamp() > deadline)
         {
             return;
         }
 
-        var node = member is null ? DescribeCore(path, value, path, ancestors) : Describe(member.Name, value, path, member);
+        var node = Describe(member?.Name ?? path, value, path, member, ancestors);
         if (path.Length > 0)
         {
             result[path] = node.Display;
@@ -516,20 +541,22 @@ public sealed class ObjectInspector
                     }
 
                     var key = FormatKey(entry.Key);
-                    FlattenInto(result, path + "[" + key + "]", entry.Value, depth + 1, maxDepth, maxItems, maxEntries, ancestors, null);
+                    FlattenInto(result, path + "[" + key + "]", entry.Value, depth + 1, maxDepth, maxItems, maxEntries, ancestors, null, deadline);
                 }
             }
-            else if (value is IEnumerable enumerable and not string)
+            else if (value is ICollection collection)
             {
+                // Only materialized collections are walked. Enumerating an arbitrary IEnumerable would run deferred
+                // LINQ, EF queries or generators — inspection must never execute application logic with side effects.
                 var i = 0;
-                foreach (var item in enumerable)
+                foreach (var item in collection)
                 {
                     if (i >= maxItems)
                     {
                         break;
                     }
 
-                    FlattenInto(result, path + "[" + i + "]", item, depth + 1, maxDepth, maxItems, maxEntries, ancestors, null);
+                    FlattenInto(result, path + "[" + i + "]", item, depth + 1, maxDepth, maxItems, maxEntries, ancestors, null, deadline);
                     i++;
                 }
             }
@@ -549,7 +576,7 @@ public sealed class ObjectInspector
                         continue;
                     }
 
-                    FlattenInto(result, childPath, child, depth + 1, maxDepth, maxItems, maxEntries, ancestors, m);
+                    FlattenInto(result, childPath, child, depth + 1, maxDepth, maxItems, maxEntries, ancestors, m, deadline);
                 }
             }
         }
@@ -584,8 +611,33 @@ public sealed class ObjectInspector
             }
         }
 
-        // Collapse parent + child changes so "Items" and "Items[0].Name" do not both show; keep the most specific ones.
-        changes.RemoveAll(c => changes.Any(other => other != c && other.Path.StartsWith(c.Path, StringComparison.Ordinal) && other.Path.Length > c.Path.Length && (other.Path[c.Path.Length] is '.' or '[')));
-        return changes;
+        return Collapse(changes);
+    }
+
+    /// <summary>
+    /// Keeps only the most specific changed paths, so a changed list does not also report every element under it.
+    /// Sorting first makes this O(n log n); the previous pairwise scan was quadratic and mutated the list it read.
+    /// </summary>
+    private static List<Model.StateDiffEntry> Collapse(List<Model.StateDiffEntry> changes)
+    {
+        if (changes.Count < 2)
+        {
+            return changes;
+        }
+
+        var sorted = changes.OrderBy(c => c.Path, StringComparer.Ordinal).ToList();
+        var result = new List<Model.StateDiffEntry>(sorted.Count);
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            var path = sorted[i].Path;
+            var next = i + 1 < sorted.Count ? sorted[i + 1].Path : null;
+            var hasChild = next is not null && next.Length > path.Length && next.StartsWith(path, StringComparison.Ordinal) && (next[path.Length] is '.' or '[');
+            if (!hasChild)
+            {
+                result.Add(sorted[i]);
+            }
+        }
+
+        return result;
     }
 }

@@ -27,10 +27,12 @@ public sealed class RenderBatchInfo
 
     public int? DiffSize { get; set; }
 
-    public List<long> RenderedInstanceIds { get; } = [];
+    /// <summary>Instance ids rendered in this batch; used to attribute a render to an ancestor that rendered first.</summary>
+    internal HashSet<long> RenderedInstanceIds { get; } = [];
 
     public long? TriggerEventId { get; set; }
 
+    /// <summary>True once no further renders may be attached (the renderer moved on, or the diff was measured).</summary>
     public bool Closed { get; set; }
 }
 
@@ -41,9 +43,14 @@ public sealed class RenderBatchInfo
 internal sealed class RenderTracker
 {
     private static readonly ConcurrentDictionary<Type, PropertyInfo[]> JsRuntimeProperties = new();
-    private static readonly ConcurrentDictionary<Type, FieldInfo[]> StateFields = new();
+    private static readonly ConcurrentDictionary<(string Label, string Ancestor), string> ParentCauseDetails = new();
+    private const string InitialCauseDetail = "First render";
+    private const string DisabledCauseDetail = "Cause tracking disabled";
+    private const string StateHasChangedCauseDetail = "StateHasChanged outside an event (async continuation, timer, state notification or explicit call)";
     private readonly DevToolsSession _session;
     private readonly DevToolsOptions _options;
+    private readonly Queue<RenderBatchInfo> _awaitingDiff = new();
+    private RenderBatchInfo? _lastDiffBatch;
     private long _batchSequence;
     private long _renderSequence;
     private long _lastRenderEndTicks;
@@ -144,7 +151,7 @@ internal sealed class RenderTracker
         }
 
         var batch = DetectBatch(record);
-        var (cause, detail, triggerId) = DetermineCause(record, component, batch);
+        var (cause, detail, triggerId) = DetermineCause(record, batch);
         var sample = new RenderSample
         {
             Sequence = Interlocked.Increment(ref _renderSequence),
@@ -189,7 +196,19 @@ internal sealed class RenderTracker
             batch.TriggerEventId ??= sample.TriggerEventId;
         }
 
-        var title = record.DisplayName + (sample.Cause == RenderCause.Initial ? " rendered (first)" : " re-rendered");
+        if (!_options.RecordRenderEvents)
+        {
+            if (exception is not null)
+            {
+                _session.Errors.Record(exception, "render", component: record, precedingEventId: sample.TriggerEventId);
+            }
+
+            _session.Touch();
+            _lastRenderEndTicks = Stopwatch.GetTimestamp();
+            return;
+        }
+
+        var title = sample.Cause == RenderCause.Initial ? record.FirstRenderTitle : record.ReRenderTitle;
         var evt = new DevToolsEvent
         {
             Kind = DevToolsEventKind.Render,
@@ -203,13 +222,7 @@ internal sealed class RenderTracker
             ComponentName = record.DisplayName,
             Timestamp = sample.At,
             StartTicks = sample.StartTicks,
-            Data = new Dictionary<string, object?>
-            {
-                ["cause"] = sample.Cause.ToString(),
-                ["batch"] = sample.BatchId,
-                ["renderCount"] = record.RenderCount,
-                ["changedState"] = sample.ChangedState,
-            },
+            Data = new RenderEventData(sample, record.RenderCount),
         };
         sample.EventId = _session.Timeline.Record(evt);
 
@@ -238,6 +251,11 @@ internal sealed class RenderTracker
         record.Renderer = renderer;
         record.ComponentId = componentId;
         _session.Components.NoteRenderer(renderer);
+
+        // Rendering always happens on the renderer's synchronization context; remembering it makes later ambient
+        // session lookups (HTTP, logs, metrics) an O(1) dictionary hit instead of a scan over every live session.
+        SessionResolver.NoteCurrentContext(_session);
+
         if (_session.Dispatcher is null)
         {
             try
@@ -266,6 +284,7 @@ internal sealed class RenderTracker
     private RenderBatchInfo? DetectBatch(ComponentRecord record)
     {
         var renderer = record.Renderer;
+        var current = CurrentBatch;
         bool newBatch;
         if (renderer is not null && BlazorReflection.CanDetectBatches)
         {
@@ -279,22 +298,20 @@ internal sealed class RenderTracker
                 diffCount = -1;
             }
 
-            newBatch = diffCount <= 0 || CurrentBatch is null;
-            if (!newBatch && CurrentBatch is { } current && current.Count > diffCount)
-            {
-                // The renderer started a new batch that already contains renders we did not observe (non-ComponentBase components).
-                newBatch = true;
-            }
+            // The batch builder's diff list is cleared between batches, so a count of zero means the renderer just
+            // started a new pass. A count lower than what we already attributed means a new pass started with renders
+            // we could not observe (components that do not derive from ComponentBase).
+            newBatch = current is null || current.Closed || diffCount <= 0 || current.Count > diffCount;
         }
         else
         {
             // Fallback heuristic: renders separated by more than 2 ms of idle time belong to different batches.
-            newBatch = CurrentBatch is null || Stopwatch.GetElapsedTime(_lastRenderEndTicks).TotalMilliseconds > 2;
+            newBatch = current is null || current.Closed || Stopwatch.GetElapsedTime(_lastRenderEndTicks).TotalMilliseconds > 2;
         }
 
         if (!newBatch)
         {
-            return CurrentBatch;
+            return current;
         }
 
         CloseBatch();
@@ -321,44 +338,111 @@ internal sealed class RenderTracker
         }
 
         batch.Closed = true;
-        var evt = _session.Timeline.Find(batch.EventId);
-        if (evt is not null)
+        if (batch.DiffMs is null)
         {
-            evt.DurationMs = batch.TotalMs;
-            evt.Detail = $"{batch.Count} component{(batch.Count == 1 ? "" : "s")} rendered, {batch.TotalMs:0.00} ms building" + (batch.DiffMs is { } d ? $", {d:0.00} ms diffing" : "") + (batch.DiffSize is { } s ? $", {s} DOM edits" : "");
-            if (batch.Count >= _options.Diagnostics.RenderCascadeSize)
+            _awaitingDiff.Enqueue(batch);
+            while (_awaitingDiff.Count > 32)
             {
-                evt.Severity = DevToolsSeverity.Warning;
+                _awaitingDiff.Dequeue();
             }
+        }
 
-            if (evt.Data is Dictionary<string, object?> data)
-            {
-                data["count"] = batch.Count;
-                data["totalMs"] = batch.TotalMs;
-            }
+        UpdateBatchEvent(batch);
+    }
+
+    private void UpdateBatchEvent(RenderBatchInfo batch)
+    {
+        var evt = _session.Timeline.Find(batch.EventId);
+        if (evt is null)
+        {
+            return;
+        }
+
+        evt.DurationMs = batch.TotalMs;
+        evt.Detail = $"{batch.Count} component{(batch.Count == 1 ? "" : "s")} rendered, {batch.TotalMs:0.00} ms building"
+            + (batch.DiffMs is { } d ? $", {d:0.00} ms diffing" : "")
+            + (batch.DiffSize is { } s ? $", {s} DOM edits" : "");
+        if (batch.Count >= _options.Diagnostics.RenderCascadeSize)
+        {
+            evt.Severity = DevToolsSeverity.Warning;
+        }
+
+        if (evt.Data is Dictionary<string, object?> data)
+        {
+            data["count"] = batch.Count;
+            data["totalMs"] = batch.TotalMs;
+            data["diffMs"] = batch.DiffMs;
+            data["diffSize"] = batch.DiffSize;
         }
     }
 
-    internal void RecordBatchDiff(double diffMs, int? diffSize)
+    /// <summary>
+    /// Called from the <c>aspnetcore.components.render_diff.duration</c> measurement, once per batch.
+    /// <para>
+    /// The framework records this metric when the batch <em>task</em> completes. In WebAssembly that is synchronous,
+    /// so the measurement belongs to the batch still open. On Blazor Server the task completes when the browser
+    /// acknowledges the render, which can be after later batches have started — so measurements are matched against
+    /// the queue of batches still waiting for one, in the order the renderer produced them.
+    /// </para>
+    /// </summary>
+    internal void RecordBatchDiff(double diffMs)
     {
-        if (CurrentBatch is { } batch)
+        var batch = TakeBatchAwaitingDiff() ?? CurrentBatch;
+        if (batch is null)
         {
-            batch.DiffMs = diffMs;
-            batch.DiffSize = diffSize;
+            return;
+        }
+
+        _lastDiffBatch = batch;
+        batch.DiffMs = diffMs;
+        if (ReferenceEquals(batch, CurrentBatch))
+        {
             CloseBatch();
         }
+        else
+        {
+            UpdateBatchEvent(batch);
+        }
     }
 
-    private (RenderCause Cause, string Detail, long? TriggerEventId) DetermineCause(ComponentRecord record, ComponentBase component, RenderBatchInfo? batch)
+    /// <summary>Called from the <c>aspnetcore.components.render_diff.size</c> measurement, which follows the duration.</summary>
+    internal void RecordBatchDiffSize(int diffSize)
+    {
+        var batch = _lastDiffBatch ?? CurrentBatch;
+        if (batch is null)
+        {
+            return;
+        }
+
+        batch.DiffSize = diffSize;
+        UpdateBatchEvent(batch);
+    }
+
+    private RenderBatchInfo? TakeBatchAwaitingDiff()
+    {
+        while (_awaitingDiff.TryDequeue(out var batch))
+        {
+            // Stale entries mean a measurement was never delivered for that batch; do not let it shift every later
+            // diff onto the wrong batch.
+            if (batch.DiffMs is null && Stopwatch.GetElapsedTime(batch.StartTicks).TotalSeconds < 5)
+            {
+                return batch;
+            }
+        }
+
+        return null;
+    }
+
+    private (RenderCause Cause, string Detail, long? TriggerEventId) DetermineCause(ComponentRecord record, RenderBatchInfo? batch)
     {
         if (record.RenderCount == 0)
         {
-            return (RenderCause.Initial, "First render", ActivityObserver.CurrentTriggerEvent(_session)?.Id);
+            return (RenderCause.Initial, InitialCauseDetail, ActivityObserver.CurrentTriggerEvent(_session)?.Id);
         }
 
         if (!_options.TrackRenderCauses)
         {
-            return (RenderCause.Unknown, "Cause tracking disabled", null);
+            return (RenderCause.Unknown, DisabledCauseDetail, null);
         }
 
         // 1. An ancestor rendered earlier in the same batch: the renderer re-set our parameters.
@@ -373,7 +457,8 @@ internal sealed class RenderTracker
                     var ancestorSample = ancestor.LastRender;
                     var triggerId = ancestorSample?.TriggerEventId;
                     var label = hops == 1 ? "Parent" : "Ancestor";
-                    return (RenderCause.ParentRender, $"{label} {ancestor.DisplayName} re-rendered (parameters re-applied)", triggerId ?? ancestorSample?.EventId);
+                    var detail = ParentCauseDetails.GetOrAdd((label, ancestor.DisplayName), static key => $"{key.Label} {key.Ancestor} re-rendered (parameters re-applied)");
+                    return (RenderCause.ParentRender, detail, triggerId ?? ancestorSample?.EventId);
                 }
 
                 ancestor = ancestor.Parent;
@@ -390,7 +475,7 @@ internal sealed class RenderTracker
         }
 
         // 3. Anything else is an explicit StateHasChanged / async continuation (timer, HTTP completion, state notification).
-        return (RenderCause.StateHasChanged, "StateHasChanged outside an event (async continuation, timer, state notification or explicit call)", null);
+        return (RenderCause.StateHasChanged, StateHasChangedCauseDetail, null);
     }
 
     private void CaptureStateDiff(ComponentRecord record, ComponentBase component, RenderSample sample)
@@ -425,6 +510,11 @@ internal sealed class RenderTracker
         }
     }
 
+    /// <summary>
+    /// Replaces the component's <c>[Inject] IJSRuntime</c> with a tracking decorator. This happens on the first render,
+    /// which is the earliest point after the framework has performed property injection; calls made from
+    /// <c>OnInitialized(Async)</c> before that first render are therefore not attributed to the component.
+    /// </summary>
     private void PatchInjectedJsRuntime(ComponentRecord record, ComponentBase component)
     {
         var properties = JsRuntimeProperties.GetOrAdd(component.GetType(), static type =>
@@ -437,7 +527,7 @@ internal sealed class RenderTracker
             try
             {
                 var current = property.GetValue(component);
-                if (current is null || current is TrackingJSRuntime)
+                if (current is null or TrackingJSRuntime)
                 {
                     continue;
                 }

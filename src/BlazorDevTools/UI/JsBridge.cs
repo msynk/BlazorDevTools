@@ -108,9 +108,8 @@ public sealed class JsBridge(DevToolsSession session, Action toggle)
     }
 
     [JSInvokable]
-    public void ReportJsToDotNet(JsCallEntry[] batch, int untrackedDotNetToJs)
+    public void ReportJsToDotNet(JsCallEntry[] batch)
     {
-        session.Browser.UntrackedDotNetToJsCalls += untrackedDotNetToJs;
         foreach (var entry in batch)
         {
             session.Browser.JsToDotNetCalls++;

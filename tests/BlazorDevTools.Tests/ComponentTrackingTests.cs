@@ -118,7 +118,7 @@ public class ComponentTrackingTests : BunitContext
     {
         var cut = Render<ParentComponent>();
         var child = Session.Components.All.Single(r => r.Type == typeof(ChildComponent));
-        var instance = (ChildComponent)child.Component;
+        var instance = Assert.IsType<ChildComponent>(child.Component);
 
         Assert.IsType<TrackingJSRuntime>(instance.JS);
         cut.InvokeAsync(async () => await instance.JS!.InvokeVoidAsync("hello"));

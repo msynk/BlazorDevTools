@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using BlazorDevTools.Events;
 
 namespace BlazorDevTools.Tests;

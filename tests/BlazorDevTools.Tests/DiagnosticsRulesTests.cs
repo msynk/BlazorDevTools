@@ -116,8 +116,9 @@ public class DiagnosticsRulesTests
             session.Diagnostics.Evaluate(force: true);
             var again = Assert.Single(session.Diagnostics.Findings, f => f.Diagnostic.RuleId == "error.repeated");
             Assert.Same(first, again);
-            Assert.Equal(2, again.Occurrences);
+            Assert.True(again.LastSeen >= again.FirstSeen);
             Assert.Contains("occurred 3 times", again.Diagnostic.Title);
+            Assert.Single(session.Timeline.Snapshot(), e => e.Kind == DevToolsEventKind.Diagnostic && e.Category == "diagnostic:error.repeated");
         }
     }
 

@@ -44,9 +44,10 @@ public sealed class Redactor
         return IsSensitiveName(member.Name);
     }
 
-    /// <summary>Redacts query-string values whose key looks sensitive; keeps everything else intact.</summary>
+    /// <summary>Redacts embedded credentials and query-string values whose key looks sensitive; keeps everything else intact.</summary>
     public string RedactUrl(string url)
     {
+        url = RedactUserInfo(url);
         var q = url.IndexOf('?');
         if (q < 0)
         {
@@ -67,5 +68,21 @@ public sealed class Redactor
         }
 
         return changed ? url[..(q + 1)] + string.Join('&', parts) : url;
+    }
+
+    /// <summary>Removes credentials embedded in a URL (https://user:secret@host), which would otherwise be shown verbatim.</summary>
+    private static string RedactUserInfo(string url)
+    {
+        var schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
+        if (schemeEnd < 0)
+        {
+            return url;
+        }
+
+        var authorityStart = schemeEnd + 3;
+        var authorityEnd = url.IndexOf('/', authorityStart);
+        var authority = authorityEnd < 0 ? url[authorityStart..] : url[authorityStart..authorityEnd];
+        var at = authority.LastIndexOf('@');
+        return at < 0 ? url : url[..authorityStart] + RedactedValue + url[(authorityStart + at)..];
     }
 }

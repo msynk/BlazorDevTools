@@ -33,7 +33,12 @@ public sealed class ErrorRecord
 
     public DateTimeOffset LastSeen { get; internal set; }
 
-    public Exception? Exception { get; init; }
+    /// <summary>
+    /// "Type: message" of the innermost exception when it differs from the outer one. The exception object itself is
+    /// deliberately not retained: its graph can reference components, services and closures, and the error center
+    /// keeps hundreds of records for the lifetime of the session.
+    /// </summary>
+    public string? InnerError { get; init; }
 }
 
 public sealed class HttpRecord
@@ -115,6 +120,9 @@ public sealed class JsInteropRecord
     public bool IsSync { get; init; }
 
     public long TimelineEventId { get; set; }
+
+    /// <summary>High-resolution start timestamp, so the duration never depends on the timeline still holding the event.</summary>
+    internal long StartTicks { get; init; }
 }
 
 /// <summary>One recorded change of a registered state provider.</summary>

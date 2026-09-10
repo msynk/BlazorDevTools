@@ -131,6 +131,9 @@ public sealed class DevToolsSession : IDisposable
     /// <summary>Monotonic version incremented on any change; the UI polls it to decide whether to re-render.</summary>
     public long Version => Volatile.Read(ref _version);
 
+    /// <summary>Set once the renderer synchronization context has been mapped to this session.</summary>
+    internal bool SynchronizationContextNoted { get; set; }
+
     internal long? LastUiEventId { get; set; }
 
     internal long? LastNavigationEventId { get; set; }
@@ -182,6 +185,9 @@ public sealed class DevToolsSession : IDisposable
         Touch();
     }
 
+    /// <summary>Whether the framework diagnostics services this session depends on are present in its container.</summary>
+    public (bool ActivitySource, bool Metrics) FrameworkInstrumentation => ActivityObserver.ResolveFrameworkServices(Services);
+
     public IReadOnlyList<DevToolsCapability> Capabilities => CapabilityReport.Build(this);
 
     /// <summary>
@@ -197,7 +203,7 @@ public sealed class DevToolsSession : IDisposable
         Errors.Clear();
         Http.Clear();
         Interop.Clear();
-        Components.Clear();
+        Components.ClearDisposed();
         Diagnostics.Clear();
         TypeMetrics.Clear();
         Touch();

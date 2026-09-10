@@ -69,12 +69,22 @@ internal sealed class StateStore : IStateProviderRegistry, IDisposable
     public IDisposable Attach(IStateProvider provider, string origin)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        lock (_lock)
+        {
+            if (_handlers.ContainsKey(provider))
+            {
+                // Already registered (a provider reachable both from DI and from an extension factory). Hand back a
+                // no-op token so disposing this registration does not tear down the original one.
+                return NullDisposable.Instance;
+            }
+        }
+
         var entry = new StateProviderEntry(provider, origin, _options.MaxStateChangesPerProvider);
         lock (_lock)
         {
             if (_handlers.ContainsKey(provider))
             {
-                return new Unsubscriber(this, provider);
+                return NullDisposable.Instance;
             }
 
             _entries.Add(entry);
@@ -187,5 +197,14 @@ internal sealed class StateStore : IStateProviderRegistry, IDisposable
     private sealed class Unsubscriber(StateStore store, IStateProvider provider) : IDisposable
     {
         public void Dispose() => store.Detach(provider);
+    }
+
+    private sealed class NullDisposable : IDisposable
+    {
+        public static readonly NullDisposable Instance = new();
+
+        public void Dispose()
+        {
+        }
     }
 }

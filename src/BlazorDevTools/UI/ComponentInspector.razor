@@ -229,7 +229,7 @@
         return parent;
     }
 
-    private static object? SafeGet(PropertyInfo property, object target)
+    private static object? SafeGet(PropertyInfo property, object? target)
     {
         try
         {
@@ -241,7 +241,7 @@
         }
     }
 
-    private static object? SafeGet(FieldInfo field, object target)
+    private static object? SafeGet(FieldInfo field, object? target)
     {
         try
         {

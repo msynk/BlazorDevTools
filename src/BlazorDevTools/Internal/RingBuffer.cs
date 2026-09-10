@@ -79,6 +79,40 @@ internal sealed class RingBuffer<T>
         }
     }
 
+    /// <summary>
+    /// Finds an item by a strictly increasing key (all our records carry monotonic ids) in O(log n).
+    /// A linear scan here is a real cost: lookups happen on every completed HTTP request, JS call and render batch.
+    /// </summary>
+    public T? FindByKey(Func<T, long> key, long value)
+    {
+        lock (_lock)
+        {
+            var lo = 0;
+            var hi = _count - 1;
+            while (lo <= hi)
+            {
+                var mid = lo + ((hi - lo) / 2);
+                var item = _items[(_head + mid) % _items.Length];
+                var current = key(item);
+                if (current == value)
+                {
+                    return item;
+                }
+
+                if (current < value)
+                {
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid - 1;
+                }
+            }
+
+            return default;
+        }
+    }
+
     /// <summary>Finds the newest item matching a predicate without allocating.</summary>
     public T? FindLast(Func<T, bool> predicate)
     {

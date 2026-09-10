@@ -55,9 +55,9 @@
                             <tr class="bdt-row @(b.Severity == DevToolsSeverity.Warning ? "bdt-sev-warning" : "")" @onclick="() => Host.SelectEvent(b.Id)">
                                 <td class="bdt-mono">@Fmt.Time(b.Timestamp)</td>
                                 <td>@b.Title</td>
-                                <td class="bdt-num">@(b.Data?["count"] ?? "…")</td>
+                                <td class="bdt-num">@(b.TryGetData("count", out var batchCount) ? batchCount : "…")</td>
                                 <td class="bdt-num">@Fmt.Ms(b.DurationMs)</td>
-                                <td class="bdt-muted bdt-truncate" style="max-width:200px">@(b.Detail?.Contains("diffing") == true ? b.Detail[(b.Detail.IndexOf("building") + 10)..] : "–")</td>
+                                <td class="bdt-muted bdt-truncate" style="max-width:200px">@DiffSummary(b.Detail)</td>
                                 <td class="bdt-truncate" style="max-width:200px">@(b.ParentEventId is { } p ? Session.Timeline.Find(p)?.Title : "")</td>
                             </tr>
                         }
@@ -104,6 +104,23 @@
     private DevToolsEvent[] _batches = [];
     private LifecycleTypeMetrics[] _typeMetrics = [];
     private double _maxTotal;
+
+    /// <summary>Shows only the diffing part of a batch detail, and nothing at all when the diff was never measured.</summary>
+    private static string DiffSummary(string? detail)
+    {
+        if (detail is null)
+        {
+            return "–";
+        }
+
+        var index = detail.IndexOf("ms building", StringComparison.Ordinal);
+        if (index < 0 || !detail.Contains("diffing", StringComparison.Ordinal))
+        {
+            return "–";
+        }
+
+        return detail[(index + "ms building, ".Length)..];
+    }
     private bool _includeDisposed;
     private string _sort = "total";
 

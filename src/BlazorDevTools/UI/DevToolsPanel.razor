@@ -9,7 +9,7 @@
         {
             if (Options.Ui.ShowBadge)
             {
-                <div class="bdt-badge" role="button" tabindex="0" title="Open Blazor DevTools (@Options.Ui.ToggleShortcut)" @onclick="Toggle" @onkeydown:preventDefault="false">
+                <button type="button" class="bdt-badge" title="Open Blazor DevTools (@Options.Ui.ToggleShortcut)" aria-label="Open Blazor DevTools" @onclick="Toggle">
                     <span>⚙ DevTools</span>
                     @if (Session.Errors.Count > 0)
                     {
@@ -19,7 +19,7 @@
                     {
                         <span class="bdt-pill bdt-chip bdt-warn">⚠ @Session.Diagnostics.ActiveWarningsOrErrors</span>
                     }
-                </div>
+                </button>
             }
         }
         else
@@ -31,7 +31,7 @@
                         <div class="bdt-tabs" role="tablist">
                             @foreach (var (id, title) in BuiltInPanels)
                             {
-                                <button type="button" role="tab" class="bdt-tab @(Ui.ActivePanelId == id ? "bdt-active" : "")" @onclick="() => ShowPanel(id)">
+                                <button type="button" role="tab" id="bdt-tab-@id" aria-selected="@(Ui.ActivePanelId == id ? "true" : "false")" aria-controls="bdt-tabpanel" class="bdt-tab @(Ui.ActivePanelId == id ? "bdt-active" : "")" @onclick="() => ShowPanel(id)">
                                     @title
                                     @if (id == "errors" && Session.Errors.Count > 0)
                                     {
@@ -49,7 +49,7 @@
                             }
                             @foreach (var panel in ExtensionPanels)
                             {
-                                <button type="button" role="tab" class="bdt-tab @(Ui.ActivePanelId == panel.Id ? "bdt-active" : "")" @onclick="() => ShowPanel(panel.Id)">@panel.Title</button>
+                                <button type="button" role="tab" id="bdt-tab-@panel.Id" aria-selected="@(Ui.ActivePanelId == panel.Id ? "true" : "false")" aria-controls="bdt-tabpanel" class="bdt-tab @(Ui.ActivePanelId == panel.Id ? "bdt-active" : "")" @onclick="() => ShowPanel(panel.Id)">@panel.Title</button>
                             }
                         </div>
                         <div class="bdt-tools">
@@ -60,7 +60,13 @@
                             <button type="button" title="Close (@Options.Ui.ToggleShortcut)" @onclick="Toggle">✕</button>
                         </div>
                     </div>
-                    <div class="bdt-body" style="position: relative;">
+                    <div class="bdt-body" id="bdt-tabpanel" role="tabpanel" aria-labelledby="bdt-tab-@Ui.ActivePanelId" style="position: relative;">
+                        @*
+                            Keyed on the active panel id. Every case of the switch below renders a different component
+                            at the same position in the render tree; without a key the diff reuses that position and
+                            the newly shown panel ends up without its event handlers, so its buttons do nothing.
+                        *@
+                        <div class="bdt-panel-host" @key="Ui.ActivePanelId">
                         @switch (Ui.ActivePanelId)
                         {
                             case "components": <ComponentsPanel /> break;
@@ -86,6 +92,7 @@
                                 }
                                 break;
                         }
+                        </div>
                         @if (Ui.CommandPaletteOpen)
                         {
                             <CommandPalette Initial="@_searchText" />

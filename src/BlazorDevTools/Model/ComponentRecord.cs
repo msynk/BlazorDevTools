@@ -50,16 +50,19 @@ public sealed class RenderSample
 public sealed class ComponentRecord
 {
     private readonly RingBuffer<RenderSample> _renders;
+    private readonly WeakReference<IComponent> _component;
     private int _renderCount;
     private int _errorCount;
 
     internal ComponentRecord(long instanceId, IComponent component, Type type, int maxRenders, bool isDevTools, bool isHidden)
     {
         InstanceId = instanceId;
-        Component = component;
+        _component = new WeakReference<IComponent>(component);
         Type = type;
         TypeName = type.FullName ?? type.Name;
         DisplayName = TypeNames.Short(type);
+        FirstRenderTitle = DisplayName + " rendered (first)";
+        ReRenderTitle = DisplayName + " re-rendered";
         IsDevTools = isDevTools;
         IsHidden = isHidden;
         CreatedAt = DateTimeOffset.UtcNow;
@@ -69,13 +72,26 @@ public sealed class ComponentRecord
 
     public long InstanceId { get; }
 
-    public IComponent Component { get; }
+    /// <summary>
+    /// The tracked instance. Held weakly: DevTools must never keep a component (and through it a whole subtree,
+    /// its services and its renderer) alive after the application dropped it. Returns null once collected.
+    /// </summary>
+    public IComponent? Component => _component.TryGetTarget(out var component) ? component : null;
+
+    /// <summary>True while the instance is still reachable; false once the GC reclaimed it.</summary>
+    public bool IsAlive => _component.TryGetTarget(out _);
 
     public Type Type { get; }
 
     public string TypeName { get; }
 
     public string DisplayName { get; }
+
+    /// <summary>Pre-built timeline titles. Renders are the hottest event in the system; formatting one string per
+    /// render is measurable in both time and GC pressure.</summary>
+    internal string FirstRenderTitle { get; }
+
+    internal string ReRenderTitle { get; }
 
     /// <summary>True for components that belong to DevTools itself; their cost is counted as overhead, not app activity.</summary>
     public bool IsDevTools { get; }
@@ -119,7 +135,14 @@ public sealed class ComponentRecord
 
     internal bool ParentResolved { get; set; }
 
-    internal Renderer? Renderer { get; set; }
+    private WeakReference<Renderer>? _renderer;
+
+    /// <summary>The renderer that owns the component, held weakly for the same reason as <see cref="Component"/>.</summary>
+    internal Renderer? Renderer
+    {
+        get => _renderer is not null && _renderer.TryGetTarget(out var renderer) ? renderer : null;
+        set => _renderer = value is null ? null : new WeakReference<Renderer>(value);
+    }
 
     internal bool RendererResolved { get; set; }
 
@@ -130,11 +153,17 @@ public sealed class ComponentRecord
 
     internal Dictionary<string, string>? LastStateSnapshot { get; set; }
 
-    public string? RenderModeName { get; internal set; }
-
     public RenderSample? LastRender => _renders.Last;
 
     public RenderSample[] Renders => _renders.ToArray();
+
+    /// <summary>Releases everything that could keep application objects alive once the component is gone.</summary>
+    internal void ReleaseReferences()
+    {
+        _component.SetTarget(null!);
+        _renderer = null;
+        LastStateSnapshot = null;
+    }
 
     internal void AddRender(RenderSample sample)
     {
@@ -159,7 +188,7 @@ public sealed class ComponentRecord
         {
             var depth = 0;
             var current = Parent;
-            while (current is not null && depth < 512)
+            while (current is not null && depth < 100_000)
             {
                 depth++;
                 current = current.Parent;
@@ -171,7 +200,7 @@ public sealed class ComponentRecord
 
     public ComponentSnapshot ToSnapshot() => new(
         InstanceId, TypeName, DisplayName, ParentInstanceId, Depth, RenderCount, TotalRenderMs, LastRenderMs, MaxRenderMs,
-        CreatedAt, LastRenderAt, IsDisposed, ErrorCount);
+        CreatedAt, LastRenderAt, IsDisposed, ErrorCount, IsHidden);
 
     public override string ToString() => $"{DisplayName}#{InstanceId}";
 }

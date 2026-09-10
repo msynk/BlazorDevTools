@@ -62,7 +62,8 @@ public class OverheadTests : BunitContext
         session.Components.Refresh(force: true);
         var childRecords = session.Components.All.Where(r => r.Type == typeof(ChildComponent)).ToList();
         Assert.True(childRecords.Count(r => !r.IsDisposed) <= 1);
-        Assert.True(session.Components.TrackedCount <= 2, "only live components stay in the identity map");
+        Assert.True(session.Components.LiveCount <= 2, "only live components stay in the identity map");
+        Assert.All(childRecords.Where(r => r.IsDisposed), r => Assert.Null(r.Component));
     }
 
     [Fact]

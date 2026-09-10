@@ -14,7 +14,10 @@ internal sealed class DevToolsHttpFilter(DevToolsOptions options, DevToolsRegist
         next(builder);
         if (registry.IsEnabled && options.TrackHttp)
         {
-            builder.AdditionalHandlers.Insert(0, new DevToolsHttpMessageHandler(options));
+            // Innermost, i.e. closest to the primary handler: every attempt a resilience/retry handler makes is a real
+            // network request and is recorded as one. Sitting outermost would hide retries behind a single record,
+            // which is exactly the pattern "why is this request repeating?" needs to show.
+            builder.AdditionalHandlers.Add(new DevToolsHttpMessageHandler(options));
         }
     };
 }

@@ -12,8 +12,6 @@ public sealed class DiagnosticRecord
 
     public DateTimeOffset LastSeen { get; set; }
 
-    public int Occurrences { get; set; } = 1;
-
     public bool Dismissed { get; set; }
 
     public long TimelineEventId { get; set; }
@@ -23,7 +21,7 @@ internal sealed class DiagnosticContext(DevToolsSession session, IReadOnlyList<C
 {
     public DateTimeOffset Now { get; } = DateTimeOffset.UtcNow;
 
-    public IReadOnlyList<ComponentSnapshot> Components { get; } = components;
+    public IReadOnlyList<ComponentSnapshot> Components => components;
 
     public IReadOnlyList<DevToolsEvent> Events { get; } = events;
 
@@ -45,6 +43,14 @@ internal sealed class DiagnosticContext(DevToolsSession session, IReadOnlyList<C
                 yield return evt;
             }
         }
+    }
+
+    private HashSet<long>? _frameworkInternals;
+
+    public bool IsFrameworkInternal(long instanceId)
+    {
+        _frameworkInternals ??= components.Where(c => c.IsFrameworkInternal).Select(c => c.InstanceId).ToHashSet();
+        return _frameworkInternals.Contains(instanceId);
     }
 
     public T? GetOptions<T>() where T : class => typeof(T) == typeof(DiagnosticsOptions) ? session.Options.Diagnostics as T
@@ -167,7 +173,6 @@ internal sealed class DiagnosticsEngine
                 {
                     existing.Diagnostic = diagnostic;
                     existing.LastSeen = now;
-                    existing.Occurrences++;
                     continue;
                 }
 

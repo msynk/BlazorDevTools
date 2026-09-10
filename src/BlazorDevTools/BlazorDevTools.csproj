@@ -10,7 +10,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- Reflection over Blazor internals is intentional and development-only; the library is not trim-safe. -->
     <IsTrimmable>false</IsTrimmable>
-    <NoWarn>$(NoWarn);CS1591;IL2026;IL2070;IL2072;IL2075;IL2080;IL3050</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;IL2026;IL2070;IL2072;IL2075;IL2080;IL3050;BL0006</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

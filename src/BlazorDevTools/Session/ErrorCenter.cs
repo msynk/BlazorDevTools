@@ -69,7 +69,7 @@ internal sealed partial class ErrorCenter
                 ComponentName = component?.DisplayName,
                 PrecedingEventId = precedingEventId ?? _session.LastUiEventId,
                 Fingerprint = fingerprint,
-                Exception = exception,
+                InnerError = Describe(exception?.InnerException),
             };
             _errors.Add(record);
             RecordTimeline(record, repeat: false);
@@ -100,7 +100,7 @@ internal sealed partial class ErrorCenter
 
     public ErrorRecord[] Snapshot() => _errors.ToArray();
 
-    public ErrorRecord? Find(long id) => _errors.FindLast(e => e.Id == id);
+    public ErrorRecord? Find(long id) => _errors.FindByKey(static e => e.Id, id);
 
     public void Clear()
     {
@@ -125,6 +125,23 @@ internal sealed partial class ErrorCenter
         var slash = Math.Max(path.LastIndexOf('\\'), path.LastIndexOf('/'));
         var file = slash >= 0 ? path[(slash + 1)..] : path;
         return file + ":" + match.Groups["line"].Value;
+    }
+
+    private static string? Describe(Exception? exception)
+    {
+        if (exception is null)
+        {
+            return null;
+        }
+
+        var innermost = exception;
+        var hops = 0;
+        while (innermost.InnerException is { } inner && hops++ < 16)
+        {
+            innermost = inner;
+        }
+
+        return innermost.GetType().Name + ": " + innermost.Message;
     }
 
     private static string? FirstLine(string? text)

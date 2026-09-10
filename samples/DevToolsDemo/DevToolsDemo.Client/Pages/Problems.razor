@@ -10,7 +10,7 @@
     <li>DevTools → Profiler: sort by renders. <code>Home</code> and every child climb together.</li>
     <li>Select <code>StatsCard</code>: "Why did it render?" says <em>Parent Home re-rendered (parameters re-applied)</em>.</li>
     <li>Select <code>Home</code>: cause is <em>StateHasChanged outside an event</em>; the Timeline shows it right after each <code>LiveClock</code> render.</li>
-    <li>Diagnostics reports a render storm with the cause breakdown. Fix: do not call StateHasChanged on the parent from the clock's tick.</li>
+    <li>Diagnostics reports <em>Renders driven only by the parent</em> for each StatsCard: every one of their renders was caused by Home, never by their own state. Fix: do not call StateHasChanged on the parent from the clock tick (or override ShouldRender in the cards).</li>
 </ProblemCard>
 
 <ProblemCard Title="2. Typing in the product search renders 120 rows per keystroke" Symptom="Input feels laggy on Server; Profiler shows ProductRow × 120 per keystroke." Href="/products">

@@ -23,7 +23,8 @@ public sealed record ComponentSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset? LastRenderAt,
     bool IsDisposed,
-    int ErrorCount)
+    int ErrorCount,
+    bool IsFrameworkInternal = false)
 {
     public double AverageRenderMs => RenderCount == 0 ? 0 : TotalRenderMs / RenderCount;
 }
@@ -34,6 +35,9 @@ public interface IDiagnosticContext
     DateTimeOffset Now { get; }
 
     IReadOnlyList<ComponentSnapshot> Components { get; }
+
+    /// <summary>True when the component is a framework or library internal the application cannot change.</summary>
+    bool IsFrameworkInternal(long instanceId);
 
     /// <summary>Recent timeline events, oldest first.</summary>
     IReadOnlyList<DevToolsEvent> Events { get; }

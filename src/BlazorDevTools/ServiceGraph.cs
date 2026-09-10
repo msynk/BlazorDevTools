@@ -120,7 +120,7 @@ public sealed class ServiceGraph
                 continue;
             }
 
-            var ctor = PickConstructor(service.ImplementationType);
+            var ctor = PickConstructor(service.ImplementationType, byType);
             if (ctor is null)
             {
                 continue;
@@ -152,7 +152,12 @@ public sealed class ServiceGraph
         return new ServiceGraph(services);
     }
 
-    private static ConstructorInfo? PickConstructor(Type type)
+    /// <summary>
+    /// Picks the constructor the container would pick: the greediest one whose parameters can all be satisfied.
+    /// Choosing the greediest constructor outright produced dependency edges that never exist at runtime, and those
+    /// edges fed an <c>Error</c>-severity captive-dependency finding — a false alarm is worse than a missing one.
+    /// </summary>
+    private static ConstructorInfo? PickConstructor(Type type, Dictionary<Type, ServiceInfo> byType)
     {
         if (type.IsAbstract || type.IsInterface || type.IsGenericTypeDefinition)
         {
@@ -161,7 +166,22 @@ public sealed class ServiceGraph
 
         var ctors = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
         var marked = ctors.FirstOrDefault(c => c.IsDefined(typeof(ActivatorUtilitiesConstructorAttribute), false));
-        return marked ?? ctors.OrderByDescending(c => c.GetParameters().Length).FirstOrDefault();
+        if (marked is not null)
+        {
+            return marked;
+        }
+
+        ConstructorInfo? best = null;
+        foreach (var ctor in ctors.OrderByDescending(c => c.GetParameters().Length))
+        {
+            best ??= ctor;
+            if (ctor.GetParameters().All(p => p.HasDefaultValue || IsWellKnown(p.ParameterType) || Resolve(p.ParameterType, byType) is not null))
+            {
+                return ctor;
+            }
+        }
+
+        return best;
     }
 
     private static ServiceInfo? Resolve(Type parameterType, Dictionary<Type, ServiceInfo> byType)

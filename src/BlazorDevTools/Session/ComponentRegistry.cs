@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using BlazorDevTools.Instrumentation;
 using BlazorDevTools.Model;
 using Microsoft.AspNetCore.Components;
@@ -21,18 +22,27 @@ public sealed class ComponentTreeNode
     public double SubtreeRenderMs { get; set; }
 }
 
-/// <summary>All component instances known to a session, with lazily resolved hierarchy and disposal detection.</summary>
+/// <summary>
+/// All component instances known to a session, with lazily resolved hierarchy and disposal detection.
+/// <para>
+/// Components are referenced weakly (see <see cref="ComponentRecord.Component"/>) and records are swept on a
+/// schedule that does not depend on the DevTools UI being open, so tracking never keeps an application object
+/// alive and never grows without bound.
+/// </para>
+/// </summary>
 internal sealed class ComponentRegistry
 {
     private readonly DevToolsSession _session;
     private readonly DevToolsOptions _options;
-    private readonly ConcurrentDictionary<IComponent, ComponentRecord> _byComponent = new(ReferenceEqualityComparer.Instance);
+    private readonly ConditionalWeakTable<IComponent, ComponentRecord> _byComponent = new();
     private readonly ConcurrentDictionary<long, ComponentRecord> _byId = new();
     private static long _nextInstanceId;
     private long _lastRefreshVersion = -1;
     private long _lastRefreshTicks;
+    private long _lastSweepTicks = Stopwatch.GetTimestamp();
     private ComponentTreeNode[]? _treeCache;
     private bool _treeCacheIncludesHidden;
+    private WeakReference<Renderer>? _renderer;
 
     public ComponentRegistry(DevToolsSession session, DevToolsOptions options)
     {
@@ -40,14 +50,28 @@ internal sealed class ComponentRegistry
         _options = options;
     }
 
-    public int TrackedCount => _byComponent.Count;
+    /// <summary>Records currently kept, including recently disposed ones still shown in the UI.</summary>
+    public int TrackedCount => _byId.Count;
 
-    public Renderer? Renderer { get; private set; }
+    /// <summary>Components that are still attached to a renderer.</summary>
+    public int LiveCount => _byId.Values.Count(r => !r.IsDisposed);
 
-    public ComponentRecord Register(IComponent component, Type type, bool isDevTools, bool isHidden)
+    /// <summary>True when <see cref="DevToolsOptions.MaxTrackedComponents"/> was hit and new components are no longer tracked.</summary>
+    public bool IsTruncated { get; private set; }
+
+    public Renderer? Renderer => _renderer is not null && _renderer.TryGetTarget(out var renderer) ? renderer : null;
+
+    public ComponentRecord? Register(IComponent component, Type type, bool isDevTools, bool isHidden)
     {
+        MaybeSweep();
+        if (_byId.Count >= _options.MaxTrackedComponents)
+        {
+            IsTruncated = true;
+            return null;
+        }
+
         var record = new ComponentRecord(Interlocked.Increment(ref _nextInstanceId), component, type, _options.MaxRendersPerComponent, isDevTools, isHidden);
-        _byComponent[component] = record;
+        _byComponent.AddOrUpdate(component, record);
         _byId[record.InstanceId] = record;
         _session.Touch();
         return record;
@@ -61,7 +85,22 @@ internal sealed class ComponentRegistry
 
     internal void NoteRenderer(Renderer renderer)
     {
-        Renderer ??= renderer;
+        _renderer ??= new WeakReference<Renderer>(renderer);
+    }
+
+    /// <summary>
+    /// Prunes on component churn so long-running sessions stay bounded even when the DevTools panel is never opened.
+    /// Runs on the renderer's dispatcher (it is called from component activation), at most once per second.
+    /// </summary>
+    private void MaybeSweep()
+    {
+        if (Stopwatch.GetElapsedTime(_lastSweepTicks).TotalSeconds < 1)
+        {
+            return;
+        }
+
+        _lastSweepTicks = Stopwatch.GetTimestamp();
+        Refresh(force: true);
     }
 
     /// <summary>Resolves component ids, parents and disposal state. Cheap enough for the UI refresh cadence; skipped when nothing changed.</summary>
@@ -76,18 +115,27 @@ internal sealed class ComponentRegistry
         var start = Stopwatch.GetTimestamp();
         _lastRefreshVersion = version;
         _lastRefreshTicks = start;
+        _lastSweepTicks = start;
         _treeCache = null;
 
         var now = DateTimeOffset.UtcNow;
+        var retention = TimeSpan.FromSeconds(_options.DisposedComponentRetentionSeconds);
         foreach (var record in _byId.Values)
         {
             if (record.IsDisposed)
             {
-                if (now - record.DisposedAt > TimeSpan.FromSeconds(60))
+                if (now - record.DisposedAt > retention)
                 {
                     _byId.TryRemove(record.InstanceId, out _);
                 }
 
+                continue;
+            }
+
+            if (!record.IsAlive)
+            {
+                // The application dropped the instance and the GC reclaimed it before we noticed: it is gone.
+                MarkDisposed(record, now, collected: true);
                 continue;
             }
 
@@ -99,7 +147,14 @@ internal sealed class ComponentRegistry
 
     internal void ResolveHierarchy(ComponentRecord record, DateTimeOffset now)
     {
-        if (!record.RendererResolved && record.Component is ComponentBase cb && BlazorReflection.CanResolveRenderer)
+        var component = record.Component;
+        if (component is null)
+        {
+            MarkDisposed(record, now, collected: true);
+            return;
+        }
+
+        if (!record.RendererResolved && component is ComponentBase cb && BlazorReflection.CanResolveRenderer)
         {
             var renderer = BlazorReflection.ResolveRenderer(cb, out var componentId);
             if (renderer is not null)
@@ -107,7 +162,7 @@ internal sealed class ComponentRegistry
                 record.Renderer = renderer;
                 record.ComponentId = componentId;
                 record.RendererResolved = true;
-                Renderer ??= renderer;
+                NoteRenderer(renderer);
             }
         }
 
@@ -117,14 +172,14 @@ internal sealed class ComponentRegistry
             return;
         }
 
-        var state = BlazorReflection.ResolveState(effectiveRenderer, record.Component);
+        var state = BlazorReflection.ResolveState(effectiveRenderer, component);
         if (state is null)
         {
             // Not attached yet (just created) or already disposed by the renderer.
             var age = now - record.CreatedAt;
             if (record.RenderCount > 0 || age > TimeSpan.FromSeconds(5))
             {
-                MarkDisposed(record, now);
+                MarkDisposed(record, now, collected: false);
             }
 
             return;
@@ -143,16 +198,27 @@ internal sealed class ComponentRegistry
         }
     }
 
-    private void MarkDisposed(ComponentRecord record, DateTimeOffset now)
+    private void MarkDisposed(ComponentRecord record, DateTimeOffset now, bool collected)
     {
         record.IsDisposed = true;
         record.DisposedAt = now;
-        _byComponent.TryRemove(record.Component, out _);
+        if (record.Component is { } component)
+        {
+            _byComponent.Remove(component);
+        }
+
+        record.ReleaseReferences();
+        if (record.IsDevTools || record.IsHidden)
+        {
+            return;
+        }
+
         _session.Timeline.Record(new Events.DevToolsEvent
         {
             Kind = Events.DevToolsEventKind.Lifecycle,
             Category = "lifecycle",
             Title = record.DisplayName + " disposed",
+            Detail = collected ? "instance was garbage collected" : null,
             ComponentInstanceId = record.InstanceId,
             ComponentName = record.DisplayName,
         });
@@ -178,24 +244,25 @@ internal sealed class ComponentRegistry
         {
             var node = nodes[record.InstanceId];
             var parent = record.Parent;
-            while (parent is not null && !nodes.ContainsKey(parent.InstanceId))
+            var hops = 0;
+            while (parent is not null && !nodes.ContainsKey(parent.InstanceId) && hops++ < 1024)
             {
                 parent = parent.Parent;
             }
 
-            if (parent is null)
+            if (parent is null || !nodes.TryGetValue(parent.InstanceId, out var parentNode) || ReferenceEquals(parentNode, node))
             {
                 roots.Add(node);
             }
             else
             {
-                nodes[parent.InstanceId].Children.Add(node);
+                parentNode.Children.Add(node);
             }
         }
 
         foreach (var root in roots)
         {
-            Aggregate(root, 0);
+            Aggregate(root);
         }
 
         _treeCache = roots.ToArray();
@@ -203,26 +270,52 @@ internal sealed class ComponentRegistry
         return _treeCache;
     }
 
-    private static void Aggregate(ComponentTreeNode node, int depth)
+    /// <summary>
+    /// Iterative post-order aggregation. Recursion would overflow the stack on deeply nested or recursive component
+    /// trees, which are exactly the trees a developer opens DevTools to understand.
+    /// </summary>
+    private static void Aggregate(ComponentTreeNode root)
     {
-        node.Depth = depth;
-        node.SubtreeRenders = node.Record.RenderCount;
-        node.SubtreeRenderMs = node.Record.TotalRenderMs;
-        foreach (var child in node.Children)
+        var order = new List<ComponentTreeNode>();
+        var stack = new Stack<ComponentTreeNode>();
+        root.Depth = 0;
+        stack.Push(root);
+        while (stack.Count > 0)
         {
-            Aggregate(child, depth + 1);
-            node.SubtreeRenders += child.SubtreeRenders;
-            node.SubtreeRenderMs += child.SubtreeRenderMs;
+            var node = stack.Pop();
+            order.Add(node);
+            node.SubtreeRenders = node.Record.RenderCount;
+            node.SubtreeRenderMs = node.Record.TotalRenderMs;
+            foreach (var child in node.Children)
+            {
+                child.Depth = node.Depth + 1;
+                stack.Push(child);
+            }
+        }
+
+        for (var i = order.Count - 1; i >= 0; i--)
+        {
+            var node = order[i];
+            foreach (var child in node.Children)
+            {
+                node.SubtreeRenders += child.SubtreeRenders;
+                node.SubtreeRenderMs += child.SubtreeRenderMs;
+            }
         }
     }
 
-    public void Clear()
+    /// <summary>Drops the history of components that are already gone. Live components keep their statistics.</summary>
+    public void ClearDisposed()
     {
-        foreach (var record in _byId.Values.Where(r => r.IsDisposed).ToList())
+        foreach (var record in _byId.Values)
         {
-            _byId.TryRemove(record.InstanceId, out _);
+            if (record.IsDisposed)
+            {
+                _byId.TryRemove(record.InstanceId, out _);
+            }
         }
 
+        IsTruncated = false;
         _treeCache = null;
         _session.Touch();
     }

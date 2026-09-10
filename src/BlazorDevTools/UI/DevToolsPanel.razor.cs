@@ -31,6 +31,7 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
 
     [Inject] public DevToolsOptions Options { get; set; } = default!;
 
+    /// <summary>Part of <see cref="IDevToolsCommandContext"/>: commands contributed by extensions resolve services through it.</summary>
     [Inject] public IServiceProvider Services { get; set; } = default!;
 
     [Inject] private IJSRuntime JS { get; set; } = default!;
@@ -255,8 +256,14 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
 
     public void ShowPanel(string panelId, string? query = null)
     {
+        var wasClosed = !Ui.IsOpen;
         Ui.ActivePanelId = panelId;
         Ui.IsOpen = true;
+        if (wasClosed)
+        {
+            RefreshCapturedData();
+        }
+
         if (query is not null)
         {
             Ui.SetQuery(panelId, query);
@@ -316,8 +323,34 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
     public void Toggle()
     {
         Ui.IsOpen = !Ui.IsOpen;
+        if (Ui.IsOpen)
+        {
+            RefreshCapturedData();
+        }
+
         Ui.Touch();
         _ = SavePrefsAsync();
+    }
+
+    /// <summary>
+    /// Brings the tree and the findings up to date immediately. Without this the panel opens on whatever the polling
+    /// loop last produced, so the component tree can be blank for the first moments after opening — which reads as
+    /// "DevTools sees nothing" exactly when the developer is forming their first impression of it.
+    /// </summary>
+    private void RefreshCapturedData()
+    {
+        try
+        {
+            Session.RenderTracker.CloseBatch();
+            Session.Components.Refresh(force: true);
+            Session.Diagnostics.Evaluate(force: true);
+            _lastVersion = Session.Version;
+            _lastUiVersion = Ui.Version;
+        }
+        catch (Exception ex)
+        {
+            Session.Errors.Record(ex, "devtools", "Refreshing captured data failed.");
+        }
     }
 
     public async Task<bool> CopyAsync(string text)
@@ -341,19 +374,31 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
     {
         if (_module is null)
         {
+            Session.Browser.StorageError = "The browser bridge module is not loaded in this DevTools panel.";
+            Ui.Touch();
             return;
         }
 
+        Session.Browser.StorageReading = true;
+        Session.Browser.StorageError = null;
+        Ui.Touch();
         try
         {
-            Session.Browser.LocalStorage = await _module.InvokeAsync<StorageEntry[]>("getStorage", "local");
-            Session.Browser.SessionStorage = await _module.InvokeAsync<StorageEntry[]>("getStorage", "session");
+            var patterns = Options.SensitiveNamePatterns.ToArray();
+            Session.Browser.LocalStorage = await _module.InvokeAsync<StorageEntry[]>("getStorage", "local", patterns);
+            Session.Browser.SessionStorage = await _module.InvokeAsync<StorageEntry[]>("getStorage", "session", patterns);
             Session.Browser.StorageReadAt = DateTimeOffset.UtcNow;
+            Session.Browser.StorageError = null;
             ApplySnapshot(await _module.InvokeAsync<BrowserSnapshot>("refresh"));
         }
-        catch (Exception ex) when (ex is JSException or JSDisconnectedException)
+        catch (Exception ex)
         {
-            Session.Browser.BridgeError = ex.Message;
+            Session.Browser.StorageError = ex.GetType().Name + ": " + ex.Message;
+            Session.Errors.Record(ex, "devtools", "Reading browser storage failed.");
+        }
+        finally
+        {
+            Session.Browser.StorageReading = false;
         }
 
         Ui.Touch();

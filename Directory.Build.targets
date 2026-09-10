@@ -1,0 +1,27 @@
+<Project>
+
+  <!--
+    Imported after each project file, so it can react to IsPackable. Everything published to NuGet is described in
+    one place; the packages must not drift apart in version, licence or repository metadata.
+  -->
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <Version Condition="'$(Version)' == '1.0.0'">0.1.0</Version>
+    <Authors>msynk</Authors>
+    <Product>Blazor DevTools</Product>
+    <Copyright>Copyright (c) msynk</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/msynk/BlazorDevTools</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/msynk/BlazorDevTools</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>blazor;devtools;diagnostics;profiler;debugging;aspnetcore</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+</Project>

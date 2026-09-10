@@ -67,6 +67,11 @@ internal sealed class DevToolsComponentActivator : IComponentActivator
 
     private void Track(IComponent instance, Type componentType)
     {
+        // Component activation is the earliest point that runs on the renderers synchronization context, and
+        // parameter-update metrics fire before any component has rendered; map the context here so those
+        // measurements can already be attributed to this session.
+        SessionResolver.NoteCurrentContext(_session);
+
         var flags = _typeFlags.GetOrAdd(componentType, ComputeFlags);
         if (flags.Ignore)
         {
@@ -74,6 +79,11 @@ internal sealed class DevToolsComponentActivator : IComponentActivator
         }
 
         var record = _session.Components.Register(instance, instance.GetType(), flags.DevTools, flags.Hidden);
+        if (record is null)
+        {
+            return; // tracking budget exhausted; the application keeps working untouched.
+        }
+
         _session.RenderTracker.Instrument(record);
         if (!flags.DevTools && !flags.Hidden)
         {

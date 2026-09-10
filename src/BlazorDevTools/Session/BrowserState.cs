@@ -1,6 +1,7 @@
 namespace BlazorDevTools.Session;
 
-public sealed record StorageEntry(string Key, int Size, string Preview);
+/// <summary>One browser storage entry. The preview is redacted in the browser, so a secret never reaches DevTools.</summary>
+public sealed record StorageEntry(string Key, int Size, string Preview, bool Redacted = false);
 
 /// <summary>Browser-side facts reported by the JS bridge. Only available when the bridge is enabled and the session is interactive.</summary>
 public sealed class BrowserState
@@ -37,11 +38,15 @@ public sealed class BrowserState
 
     public int JsToDotNetCalls { get; internal set; }
 
-    public int UntrackedDotNetToJsCalls { get; internal set; }
-
     public IReadOnlyList<StorageEntry>? LocalStorage { get; internal set; }
 
     public IReadOnlyList<StorageEntry>? SessionStorage { get; internal set; }
 
     public DateTimeOffset? StorageReadAt { get; internal set; }
+
+    /// <summary>Why the last storage read failed, if it did. Shown in the Browser panel instead of failing silently.</summary>
+    public string? StorageError { get; internal set; }
+
+    /// <summary>True while a storage read is in flight, so the button never looks like it did nothing.</summary>
+    public bool StorageReading { get; internal set; }
 }

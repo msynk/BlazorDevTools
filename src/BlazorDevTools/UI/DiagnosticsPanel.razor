@@ -23,7 +23,7 @@
                         <span class="bdt-sev-dot bdt-@d.Severity.ToString().ToLowerInvariant()"></span>
                         @d.Title
                         <span class="bdt-chip">@d.RuleId</span>
-                        @if (f.Occurrences > 1) { <span class="bdt-muted">seen @f.Occurrences× · last @Fmt.Ago(f.LastSeen)</span> }
+                        <span class="bdt-muted">first seen @Fmt.Ago(f.FirstSeen) · still reported @Fmt.Ago(f.LastSeen)</span>
                     </div>
                     <div class="bdt-diag-evidence">@d.Evidence</div>
                     @if (d.Suggestion is not null)

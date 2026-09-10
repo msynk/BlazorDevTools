@@ -12,10 +12,11 @@ public sealed class DevToolsRegistry
 {
     private readonly Lazy<ServiceGraph?> _serviceGraph;
 
-    internal DevToolsRegistry(DevToolsOptions options, bool isEnabled, IServiceCollection? services)
+    internal DevToolsRegistry(DevToolsOptions options, bool isEnabled, string enabledReason, IServiceCollection? services)
     {
         Options = options;
         IsEnabled = isEnabled;
+        EnabledReason = enabledReason;
         StartedAt = DateTimeOffset.UtcNow;
         var builder = new ExtensionBuilder();
         foreach (var extension in options.Extensions)
@@ -48,6 +49,9 @@ public sealed class DevToolsRegistry
     public DevToolsOptions Options { get; }
 
     public bool IsEnabled { get; }
+
+    /// <summary>Why DevTools is (or is not) running, so a developer never has to guess when the panel does not appear.</summary>
+    public string EnabledReason { get; }
 
     public DateTimeOffset StartedAt { get; }
 

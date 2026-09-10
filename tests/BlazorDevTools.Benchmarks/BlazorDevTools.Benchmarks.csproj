@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- Sequence numbers are generated on purpose here: the benchmark builds a fixed-size list of identical children. -->
+    <NoWarn>$(NoWarn);BL0006;ASP0000;ASP0006</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BlazorDevTools\BlazorDevTools.csproj" />
+  </ItemGroup>
+
+</Project>

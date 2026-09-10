@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using BlazorDevTools.Events;
 using BlazorDevTools.Instrumentation;
 using BlazorDevTools.Model;

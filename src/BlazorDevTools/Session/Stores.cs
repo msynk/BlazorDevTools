@@ -33,7 +33,7 @@ internal sealed class HttpStore
 
     public HttpRecord[] Snapshot() => _requests.ToArray();
 
-    public HttpRecord? Find(long id) => _requests.FindLast(r => r.Id == id);
+    public HttpRecord? Find(long id) => _requests.FindByKey(static r => r.Id, id);
 
     public void Clear()
     {

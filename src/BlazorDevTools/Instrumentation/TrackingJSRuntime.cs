@@ -43,6 +43,7 @@ public class TrackingJSRuntime : IJSRuntime
 
     public async ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args)
     {
+        args = Unwrap(args);
         var record = Begin<TValue>(identifier, args, isModule: false, isSync: false);
         try
         {
@@ -57,8 +58,40 @@ public class TrackingJSRuntime : IJSRuntime
         }
     }
 
+    /// <summary>
+    /// Replaces tracking wrappers in an argument array with the framework's own references.
+    /// The JSON converter that turns an <see cref="IJSObjectReference"/> into <c>{"__jsObjectId":n}</c> only matches
+    /// the framework's concrete type; a wrapper would silently be serialized as a plain object and the JS side would
+    /// receive garbage. Only top-level arguments can be repaired, which is why wrapping is optional
+    /// (<see cref="DevToolsOptions.TrackJsModuleReferences"/>).
+    /// </summary>
+    internal static object?[]? Unwrap(object?[]? args)
+    {
+        if (args is null)
+        {
+            return null;
+        }
+
+        object?[]? copy = null;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] is TrackingJSObjectReference wrapper)
+            {
+                copy ??= (object?[])args.Clone();
+                copy[i] = wrapper.Inner;
+            }
+        }
+
+        return copy ?? args;
+    }
+
     internal TValue Wrap<TValue>(TValue result)
     {
+        if (!Session.Options.TrackJsModuleReferences)
+        {
+            return result;
+        }
+
         if (result is IJSObjectReference reference && result is not TrackingJSObjectReference)
         {
             object wrapped = reference is IJSInProcessObjectReference inProcess
@@ -79,6 +112,7 @@ public class TrackingJSRuntime : IJSRuntime
         {
             Id = Session.Interop.NextId(),
             At = DateTimeOffset.UtcNow,
+            StartTicks = Stopwatch.GetTimestamp(),
             Direction = JsInteropDirection.DotNetToJs,
             Identifier = identifier,
             ArgumentCount = args?.Length ?? 0,
@@ -106,7 +140,7 @@ public class TrackingJSRuntime : IJSRuntime
 
     internal void End(JsInteropRecord record, Exception? exception)
     {
-        var elapsed = Stopwatch.GetElapsedTime(Session.Timeline.Find(record.TimelineEventId)?.StartTicks ?? Stopwatch.GetTimestamp()).TotalMilliseconds;
+        var elapsed = Stopwatch.GetElapsedTime(record.StartTicks).TotalMilliseconds;
         var error = exception is null ? null : exception.GetType().Name + ": " + exception.Message;
         Session.Interop.Complete(record, elapsed, exception is null, error);
         var severity = exception is not null ? DevToolsSeverity.Error : elapsed >= Session.Options.Diagnostics.SlowJsInteropMs ? DevToolsSeverity.Warning : DevToolsSeverity.Info;
@@ -129,6 +163,7 @@ public sealed class TrackingInProcessJSRuntime : TrackingJSRuntime, IJSInProcess
 
     public TResult Invoke<TResult>(string identifier, params object?[]? args)
     {
+        args = Unwrap(args);
         var record = Begin<TResult>(identifier, args, isModule: false, isSync: true);
         try
         {
@@ -160,6 +195,7 @@ public class TrackingJSObjectReference : IJSObjectReference
 
     public async ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args)
     {
+        args = TrackingJSRuntime.Unwrap(args);
         var record = Runtime.Begin<TValue>("module." + identifier, args, isModule: true, isSync: false);
         try
         {
@@ -188,6 +224,7 @@ public sealed class TrackingInProcessJSObjectReference : TrackingJSObjectReferen
 
     public TValue Invoke<TValue>(string identifier, params object?[]? args)
     {
+        args = TrackingJSRuntime.Unwrap(args);
         var record = Runtime.Begin<TValue>("module." + identifier, args, isModule: true, isSync: true);
         try
         {

@@ -85,7 +85,7 @@ internal sealed class Timeline : IDevToolsTimeline
             return null;
         }
 
-        return _events.FindLast(e => e.Id == id);
+        return _events.FindByKey(static e => e.Id, id);
     }
 
     public DevToolsEvent[] Snapshot() => _events.ToArray();

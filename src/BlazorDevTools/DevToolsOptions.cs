@@ -24,6 +24,12 @@ public sealed class DiagnosticsOptions
 
     public int RenderStormWindowMs { get; set; } = 2000;
 
+    /// <summary>
+    /// Renders within 10 seconds, all caused by an ancestor re-rendering, that count as an avoidable render pattern.
+    /// Deliberately much lower than <see cref="RenderStormCount"/>: the evidence here is the ratio, not the rate.
+    /// </summary>
+    public int ParentDrivenRenderCount { get; set; } = 10;
+
     /// <summary>Number of components rendered in one batch that counts as a render cascade.</summary>
     public int RenderCascadeSize { get; set; } = 25;
 
@@ -85,6 +91,15 @@ public sealed class DevToolsOptions
     /// <summary>Maximum render samples kept per component instance.</summary>
     public int MaxRendersPerComponent { get; set; } = 100;
 
+    /// <summary>
+    /// Upper bound on tracked component instances per session. Components are referenced weakly, so this only caps
+    /// bookkeeping; when it is reached new components are not tracked and the UI says so instead of growing forever.
+    /// </summary>
+    public int MaxTrackedComponents { get; set; } = 20_000;
+
+    /// <summary>How long a disposed component stays visible in the tree and inspector before its record is dropped.</summary>
+    public int DisposedComponentRetentionSeconds { get; set; } = 60;
+
     public int MaxErrors { get; set; } = 300;
 
     public int MaxHttpRequests { get; set; } = 500;
@@ -96,6 +111,14 @@ public sealed class DevToolsOptions
     /// <summary>Attribute renders to UI events, parent renders and navigation using <c>Activity</c> and render-batch analysis.</summary>
     public bool TrackRenderCauses { get; set; } = true;
 
+    /// <summary>
+    /// Record one timeline entry per component render. This is what lets the timeline answer "what did this click
+    /// cause?", and it is also the single largest cost DevTools adds, because renders are the highest-frequency
+    /// event in a Blazor application. Turning it off keeps render counts, durations, causes and the profiler intact;
+    /// only the per-render rows in the timeline disappear. Consider it for very large or very render-heavy apps.
+    /// </summary>
+    public bool RecordRenderEvents { get; set; } = true;
+
     /// <summary>Track HTTP requests made through <c>IHttpClientFactory</c> clients.</summary>
     public bool TrackHttp { get; set; } = true;
 
@@ -105,8 +128,23 @@ public sealed class DevToolsOptions
     /// <summary>Wrap <c>IJSRuntime</c> instances injected into components to attribute JS interop calls to components.</summary>
     public bool TrackJsInterop { get; set; } = true;
 
+    /// <summary>
+    /// Also wrap the <c>IJSObjectReference</c> values returned by tracked runtimes, so calls into imported JS modules
+    /// are attributed. DevTools unwraps such references when they are passed back as arguments through a tracked
+    /// runtime, but it cannot do so for references nested inside other arguments or passed to an untracked runtime.
+    /// Turn this off if a module reference must round-trip through code DevTools does not see.
+    /// </summary>
+    public bool TrackJsModuleReferences { get; set; } = true;
+
     /// <summary>Install the browser bridge (JS errors, online/offline, reconnect state, storage inspection, keyboard shortcut).</summary>
     public bool EnableBrowserBridge { get; set; } = true;
+
+    /// <summary>
+    /// Register the frameworks own components ActivitySource and meters when the host has not already done so.
+    /// Server-side rendering registers them itself; WebAssembly and custom hosts do not, and without them DevTools
+    /// cannot attribute a render to the UI event that caused it. Turn off to keep the app free of the meter factory.
+    /// </summary>
+    public bool UseFrameworkInstrumentation { get; set; } = true;
 
     /// <summary>
     /// Snapshot component fields on every render for every component and diff them. Off by default because it costs
@@ -139,4 +177,7 @@ public sealed class DevToolsOptions
 
     /// <summary>Extensions contributed by libraries or the application.</summary>
     public List<IDevToolsExtension> Extensions { get; } = [];
+
+    /// <summary>The decision <c>AddBlazorDevTools</c> made, so companion packages do not have to repeat it.</summary>
+    internal bool ResolvedEnabled { get; set; }
 }

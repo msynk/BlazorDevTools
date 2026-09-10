@@ -7,6 +7,7 @@ internal static class BuiltInRules
     public static IEnumerable<IDiagnosticRule> Create() =>
     [
         new RenderStormRule(),
+        new ParentDrivenRenderRule(),
         new RenderCascadeRule(),
         new SlowRenderRule(),
         new SlowEventHandlerRule(),
@@ -21,6 +22,55 @@ internal static class BuiltInRules
     private static DiagnosticsOptions Opt(IDiagnosticContext ctx) => ctx.GetOptions<DiagnosticsOptions>() ?? new DiagnosticsOptions();
 
     private static string Ms(double value) => value.ToString("0.#") + " ms";
+
+    /// <summary>
+    /// A component that only ever re-renders because an ancestor did. This is the most common avoidable cost in a
+    /// Blazor application and it is invisible to a rate-based rule: a dashboard re-rendering twice a second never
+    /// reaches a "storm" threshold, yet every one of those renders is work nobody asked for.
+    /// </summary>
+    private sealed class ParentDrivenRenderRule : IDiagnosticRule
+    {
+        public string Id => "render.parent-driven";
+
+        public string Title => "Renders driven only by the parent";
+
+        public string Description => "A component re-renders only because an ancestor re-rendered, never because of its own state or an event.";
+
+        public IEnumerable<Diagnostic> Evaluate(IDiagnosticContext context)
+        {
+            var options = Opt(context);
+            var window = TimeSpan.FromSeconds(10);
+            var renders = context.EventsInWindow(DevToolsEventKind.Render, window).Where(e => e.ComponentInstanceId is not null).ToList();
+            foreach (var group in renders.GroupBy(e => e.ComponentInstanceId!.Value))
+            {
+                if (context.IsFrameworkInternal(group.Key))
+                {
+                    continue;
+                }
+
+                var all = group.ToList();
+                var parentDriven = all.Count(e => string.Equals(e.DataString("cause"), "ParentRender", StringComparison.Ordinal));
+                if (all.Count < options.ParentDrivenRenderCount || parentDriven < all.Count - 1)
+                {
+                    continue;
+                }
+
+                var name = all[0].ComponentName ?? "component";
+                var ancestor = all.Select(e => e.Detail).FirstOrDefault(d => d is not null)?.Replace(" re-rendered (parameters re-applied)", "") ?? "its parent";
+                var totalMs = all.Sum(e => e.DurationMs ?? 0);
+                yield return new Diagnostic(
+                    Id,
+                    DiagnosticSeverity.Info,
+                    $"{name} re-rendered {parentDriven} times, every one of them because {ancestor} re-rendered",
+                    $"None of these renders came from an event, navigation or its own state; total build time {Ms(totalMs)} in the last 10 s. "
+                        + "The parent re-applies parameters on every one of its own renders, and Blazor cannot know the values are equivalent.",
+                    "Override ShouldRender, pass values the parent does not recreate per render (no new lambdas, collections or anonymous objects), or move the fast-changing state out of the parent so it does not re-render at all.",
+                    Fingerprint: $"{Id}:{group.Key}",
+                    ComponentInstanceId: group.Key,
+                    RelatedEventIds: all.Take(20).Select(e => e.Id).ToList());
+            }
+        }
+    }
 
     /// <summary>Many renders of one component in a short window. Evidence includes the cause breakdown so the developer knows where to look.</summary>
     private sealed class RenderStormRule : IDiagnosticRule
@@ -45,7 +95,7 @@ internal static class BuiltInRules
                 }
 
                 var name = group.First().ComponentName ?? "component";
-                var causes = group.GroupBy(e => e.Data?["cause"]?.ToString() ?? "Unknown").OrderByDescending(g => g.Count()).ToList();
+                var causes = group.GroupBy(e => e.DataString("cause") ?? "Unknown").OrderByDescending(g => g.Count()).ToList();
                 var breakdown = string.Join("; ", causes.Select(c => $"{c.Count()} × {Describe(c.Key, c)}"));
                 var totalMs = group.Sum(e => e.DurationMs ?? 0);
                 var suggestion = causes[0].Key switch

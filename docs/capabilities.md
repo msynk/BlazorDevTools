@@ -28,12 +28,12 @@ deliberately not shown as fact · **N/A** — not obtainable.
 |---|---|---|
 | Render count, `BuildRenderTree` duration per instance | Instrumentation | The private `_renderFragment` of each `ComponentBase` is replaced with a measuring wrapper at creation. Components implementing `IComponent` directly are listed but not measured (shown as *not measured*). |
 | Render batches (one DOM diff) | Instrumentation | Batch boundary = `RenderBatchBuilder.UpdatedComponentDiffs.Count == 0` at render start. Fallback: idle-time heuristic (flagged *Unreliable*). |
-| Batch diff duration and DOM edit count | Runtime | `aspnetcore.components.render_diff.duration/size` meters (.NET 10, needs `IMeterFactory`). |
+| Batch diff duration and DOM edit count | Runtime | `aspnetcore.components.render_diff.duration/size` meters (.NET 10). On Blazor Server the framework records them when the browser acknowledges the render, so DevTools matches each measurement back to the batch that produced it. **Blazor WebAssembly compiles `System.Diagnostics.Metrics` out by default**: add `<MetricsSupport>true</MetricsSupport>` to the WebAssembly project, otherwise the About panel reports this row as *Not available* and says why. |
 | Cause: parent re-render | Available* | An ancestor rendered earlier in the same batch (renderer re-applied parameters). *Needs hierarchy + batches. |
-| Cause: UI event (with attribute, component, method) | Runtime | `Microsoft.AspNetCore.Components.HandleEvent` activity; DevTools adds an `ActivityListener`. Before the first activity is seen the About panel says so. |
+| Cause: UI event (with attribute, component, method) | Runtime | `Microsoft.AspNetCore.Components.HandleEvent` activity; DevTools adds an `ActivityListener` **and registers the framework's own `ComponentsActivitySource`** (`AddComponentsTracing`), which server-side rendering registers but WebAssembly and custom hosts do not. Interactions with the DevTools panel itself are excluded. Before the first activity is seen the About panel says so. |
 | Cause: navigation | Partial | `NavigationManager.LocationChanged` always; `Navigate` activity when emitted. |
 | Cause: explicit `StateHasChanged` / async continuation | Partial | Everything not attributable above. The caller is not identified (no stack walk by design). |
-| `SetParametersAsync` cost (OnInitialized/OnParametersSet) | Runtime | `aspnetcore.components.update_parameters.duration`, per component type. |
+| `SetParametersAsync` cost (OnInitialized/OnParametersSet) | Runtime | `aspnetcore.components.update_parameters.duration`, per component type. Same WebAssembly caveat as the diff meters. |
 | Event handler duration | Runtime | Activity duration; also `handle_event.duration` meter. |
 
 ## Events and timeline
@@ -67,7 +67,7 @@ deliberately not shown as fact · **N/A** — not obtainable.
 
 | Information | Status | How / why |
 |---|---|---|
-| .NET → JS from components (identifier, duration, args types, result, errors, component) | Instrumentation | `[Inject] IJSRuntime` replaced with a tracking wrapper before the first render (after `OnInitialized`). Module references obtained through it are wrapped too. |
+| .NET → JS from components (identifier, duration, args types, result, errors, component) | Instrumentation | `[Inject] IJSRuntime` is replaced with a tracking wrapper on the first render — the earliest point after the framework performs property injection. Calls made from `OnInitialized`/`OnInitializedAsync` therefore run before the wrapper exists and are not attributed. Module references obtained through a wrapped runtime are wrapped too (`TrackJsModuleReferences`, on by default); DevTools unwraps them again when they are passed back as arguments through a tracked runtime, but cannot do so for references nested inside other arguments — turn the option off if a module reference must round-trip through code DevTools does not see. |
 | .NET → JS from services | Integration | `jsRuntime.WithDevToolsTracking(session)`. Global decoration is unsafe (framework casts `IJSRuntime` to `RemoteJSRuntime`/`WebAssemblyJSRuntime`). |
 | JS → .NET | Instrumentation | `DotNet.invokeMethodAsync/invokeMethod` wrapped by the browser bridge; reported in 500 ms batches. |
 
@@ -97,7 +97,7 @@ deliberately not shown as fact · **N/A** — not obtainable.
 |---|---|---|
 | Lifecycle, connection up/down, disconnect count, duration | Instrumentation | `CircuitHandler` registered by `AddBlazorDevToolsServer`. |
 | Inbound message count and processing time (slow messages flagged) | Instrumentation | `CircuitHandler.CreateInboundActivityHandler`. |
-| Active circuits in the process (aggregates only) | Available | Singleton registry; ids truncated; other circuits' data stays private. |
+| Active circuits in the process (aggregates only) | Available | Singleton registry; ids truncated to 8 characters; only lifecycle counters of other circuits are visible — their components, events and state stay private to their own sessions. On a shared development server this still means other developers' circuit activity is visible; the panel says so. |
 | Reconnect attempts | Instrumentation | `components:reconnect-state-changed` DOM event. |
 | Message sizes, latency, payloads | N/A | Not exposed by the framework. |
 
@@ -106,7 +106,7 @@ deliberately not shown as fact · **N/A** — not obtainable.
 | Information | Status |
 |---|---|
 | Online/offline, visibility, user agent, JS heap (Chromium), navigation timing, resource count | Instrumentation (bridge) |
-| localStorage / sessionStorage inventory (on request, redacted previews) | Instrumentation (bridge) |
+| localStorage / sessionStorage inventory (on request) | Instrumentation (bridge). Values are redacted **in the browser** when the key matches a sensitive pattern or the value looks like a token (JWT shape), so a secret never reaches the .NET side at all. |
 | IndexedDB, generic DOM events | N/A by design (no Blazor-specific value; use browser DevTools) |
 
 ## DevTools itself
@@ -114,4 +114,4 @@ deliberately not shown as fact · **N/A** — not obtainable.
 | Information | Status |
 |---|---|
 | Overhead: bookkeeping per render, UI render time, inspection, diagnostics, tree refresh | Available (About panel) |
-| Session isolation | Available (one session per circuit/app; static listeners route by dispatcher) |
+| Session isolation | Available. One session per circuit/app. Ambient activity (HTTP, logs, metrics) is routed by the renderer's synchronization context, then by `Dispatcher.CheckAccess()`. On Blazor Server there is deliberately **no** "only live session" fallback: attributing background work to whichever circuit happens to be connected would be a guess, and a guess about another user's data. |
