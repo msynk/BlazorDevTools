@@ -9,8 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\DevToolsDemo.Client\DevToolsDemo.Client.csproj" />
-    <ProjectReference Include="..\..\..\src\BlazorDevTools.Server\BlazorDevTools.Server.csproj" />
+    <ProjectReference Include="..\BlazorDevTools.Demo.Client\BlazorDevTools.Demo.Client.csproj" />
+    <ProjectReference Include="..\..\src\BlazorDevTools.Server\BlazorDevTools.Server.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.11" />
   </ItemGroup>
 

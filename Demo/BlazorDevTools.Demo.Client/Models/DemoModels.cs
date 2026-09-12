@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 
-namespace DevToolsDemo.Client.Models;
+namespace BlazorDevTools.Demo.Client.Models;
 
 public sealed record Product(int Id, string Name, string Category, decimal Price, int Stock, double Rating);
 

@@ -1,7 +1,7 @@
 using BlazorDevTools;
-using DevToolsDemo.Client.Models;
-using DevToolsDemo.Client.Services;
-using DevToolsDemo.Components;
+using BlazorDevTools.Demo.Client.Models;
+using BlazorDevTools.Demo.Client.Services;
+using BlazorDevTools.Demo.Components;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -55,7 +55,7 @@ api.MapGet("/profile", () => new Profile("ada.lovelace", "ada@example.com", "sec
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()
     .AddInteractiveWebAssemblyRenderMode()
-    .AddAdditionalAssemblies(typeof(DevToolsDemo.Client._Imports).Assembly);
+    .AddAdditionalAssemblies(typeof(BlazorDevTools.Demo.Client._Imports).Assembly);
 
 app.Run();
 

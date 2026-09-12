@@ -1,11 +1,11 @@
 using System.Net.Http.Json;
 using BlazorDevTools;
 using BlazorDevTools.State;
-using DevToolsDemo.Client.Models;
+using BlazorDevTools.Demo.Client.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace DevToolsDemo.Client.Services;
+namespace BlazorDevTools.Demo.Client.Services;
 
 /// <summary>Registrations shared by the server and the WebAssembly client so both hosts behave the same under Interactive Auto.</summary>
 public static class DemoServices

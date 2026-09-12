@@ -16,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\src\BlazorDevTools\BlazorDevTools.csproj" />
+    <ProjectReference Include="..\..\src\BlazorDevTools\BlazorDevTools.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,5 @@
 using BlazorDevTools;
-using DevToolsDemo.Client.Services;
+using BlazorDevTools.Demo.Client.Services;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);

@@ -111,7 +111,7 @@ The `BlazorDevTools.Server` package is itself an extension (Circuit panel, circu
 src/BlazorDevTools.Abstractions   public integration API (events, state providers, rules, commands, panels, capabilities)
 src/BlazorDevTools                instrumentation, session stores, diagnostics, inspection, DevTools UI (Razor class library)
 src/BlazorDevTools.Server         circuit handler, circuit registry, Circuit panel (reference extension)
-samples/DevToolsDemo              Blazor Web App (Interactive Auto) with a "Problems to diagnose" index
+Demo/BlazorDevTools.Demo          Blazor Web App (Interactive Auto) with a "Problems to diagnose" index
 tests/BlazorDevTools.Tests        xunit + bUnit: instrumentation, tree, rendering, timeline, state, network, interop,
                                   diagnostics, DI graph, concurrency, overhead, memory bounds, scale, panel interaction,
                                   framework-diagnostics attribution, extensibility
@@ -119,7 +119,7 @@ tests/BlazorDevTools.Benchmarks   reproducible overhead measurement (dotnet run 
 docs/                             capability matrix, architecture, performance
 ```
 
-Run the demo: `dotnet run --project samples/DevToolsDemo/DevToolsDemo`, then open `/problems`.
+Run the demo: `dotnet run --project Demo/BlazorDevTools.Demo`, then open `/problems`.
 Run the tests: `dotnet test`.
 
 ## Status

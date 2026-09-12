@@ -1,8 +1,7 @@
 <Solution>
-  <Folder Name="/samples/" />
-  <Folder Name="/samples/DevToolsDemo/">
-    <Project Path="samples/DevToolsDemo/DevToolsDemo.Client/DevToolsDemo.Client.csproj" />
-    <Project Path="samples/DevToolsDemo/DevToolsDemo/DevToolsDemo.csproj" />
+  <Folder Name="/Demo/">
+    <Project Path="Demo/BlazorDevTools.Demo.Client/BlazorDevTools.Demo.Client.csproj" />
+    <Project Path="Demo/BlazorDevTools.Demo/BlazorDevTools.Demo.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/BlazorDevTools.Abstractions/BlazorDevTools.Abstractions.csproj" />
