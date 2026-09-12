@@ -167,4 +167,30 @@ public class ComponentTrackingTests : BunitContext
         cut.InvokeAsync(() => resolved = SessionResolver.Resolve());
         Assert.Same(Session, resolved);
     }
+
+    [Fact]
+    public void Disabled_tracking_options_remove_optional_work_without_disabling_render_counts()
+    {
+        using var context = new BunitContext();
+        context.Services.AddSingleton<IJSRuntime>(new FakeJSRuntime());
+        context.Services.AddBlazorDevTools(options =>
+        {
+            options.Enabled = true;
+            options.UseFrameworkInstrumentation = false;
+            options.RecordRenderEvents = false;
+            options.TrackRenderCauses = false;
+            options.TrackJsInterop = false;
+        });
+
+        var cut = context.Render<ParentComponent>();
+        cut.InvokeAsync(() => cut.Instance.Refresh());
+        var session = context.Services.GetRequiredService<DevToolsSession>();
+        var parent = session.Components.All.Single(record => record.Type == typeof(ParentComponent));
+        var child = session.Components.All.Single(record => record.Type == typeof(ChildComponent));
+
+        Assert.Equal(2, parent.RenderCount);
+        Assert.Equal(RenderCause.Unknown, parent.LastRender!.Cause);
+        Assert.DoesNotContain(session.Timeline.Snapshot(), e => e.Kind == DevToolsEventKind.Render);
+        Assert.IsNotType<TrackingJSRuntime>(((ChildComponent)child.Component!).JS);
+    }
 }

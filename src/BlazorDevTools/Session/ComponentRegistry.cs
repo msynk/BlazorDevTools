@@ -189,12 +189,17 @@ internal sealed class ComponentRegistry
         if (!record.ParentResolved)
         {
             var parentState = state.LogicalParentComponentState ?? state.ParentComponentState;
-            if (parentState is not null && _byComponent.TryGetValue(parentState.Component, out var parent))
+            if (parentState is null)
+            {
+                record.ParentResolved = true;
+            }
+            else if (_byComponent.TryGetValue(parentState.Component, out var parent))
             {
                 record.Parent = parent;
+                record.ParentResolved = true;
             }
-
-            record.ParentResolved = true;
+            // A renderer can expose the child before its parent has been registered by our activator.
+            // Leave the link unresolved so a later refresh can repair the tree.
         }
     }
 
@@ -315,7 +320,8 @@ internal sealed class ComponentRegistry
             }
         }
 
-        IsTruncated = false;
+        // Once an instance was omitted at the cap we cannot know when that untracked instance is disposed.
+        // Keep this warning sticky for the session rather than implying the registry is complete again.
         _treeCache = null;
         _session.Touch();
     }

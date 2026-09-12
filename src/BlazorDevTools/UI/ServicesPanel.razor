@@ -18,7 +18,7 @@
                 <table>
                     <thead><tr><th>Service</th><th>Lifetime</th><th>Implementation</th><th class="bdt-num">Deps</th><th class="bdt-num">Used by</th></tr></thead>
                     <tbody>
-                        <Virtualize Items="_rows" ItemSize="23" Context="s">
+                        <Virtualize Items="_rows" ItemSize="23" Context="s" SpacerElement="tr">
                             <tr class="bdt-row @(_selected == s ? "bdt-selected" : "")" @onclick="() => { _selected = s; }">
                                 <td class="bdt-mono bdt-truncate" style="max-width:260px" title="@s.ServiceType.FullName">@s.ServiceTypeName @(s.IsKeyed ? "🔑" : "") @(s.IsShadowed ? "(overridden)" : "")</td>
                                 <td><span class="bdt-chip bdt-@Fmt.Lifetime(s.Lifetime)">@Fmt.Lifetime(s.Lifetime)</span></td>
@@ -71,7 +71,7 @@
                     @foreach (var c in s.Consumers)
                     {
                         var consumer = c;
-                        <div><a class="bdt-mono" @onclick="() => _selected = consumer">@c.ServiceTypeName</a> <span class="bdt-chip bdt-@Fmt.Lifetime(c.Lifetime)">@Fmt.Lifetime(c.Lifetime)</span></div>
+                        <div><button type="button" class="bdt-link bdt-mono" @onclick="() => _selected = consumer">@c.ServiceTypeName</button> <span class="bdt-chip bdt-@Fmt.Lifetime(c.Lifetime)">@Fmt.Lifetime(c.Lifetime)</span></div>
                     }
                     @foreach (var comp in _componentConsumers)
                     {
@@ -160,7 +160,7 @@
             var d = dep;
             var captive = service.Lifetime == ServiceLifetime.Singleton && d.Lifetime != ServiceLifetime.Singleton;
             <div style="padding-left:@(depth * 14)px">
-                <a class="bdt-mono" @onclick="() => _selected = d">@d.ServiceTypeName</a>
+                <button type="button" class="bdt-link bdt-mono" @onclick="() => _selected = d">@d.ServiceTypeName</button>
                 <span class="bdt-chip bdt-@Fmt.Lifetime(d.Lifetime)">@Fmt.Lifetime(d.Lifetime)</span>
                 @if (captive) { <span class="bdt-chip bdt-err">captive</span> }
             </div>

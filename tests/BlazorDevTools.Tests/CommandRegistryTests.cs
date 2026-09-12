@@ -1,4 +1,5 @@
 using BlazorDevTools.Session;
+using BlazorDevTools.Commands;
 
 namespace BlazorDevTools.Tests;
 
@@ -56,5 +57,50 @@ public class CommandRegistryTests
         var results = registry.Search("", limit: 100);
         Assert.Equal(registry.Commands.Count, results.Count);
         Assert.Equal(results.Select(r => r.Command.Category).OrderBy(c => c), results.Select(r => r.Command.Category));
+    }
+
+    [Fact]
+    public async Task Theme_command_cycles_through_auto_dark_and_light()
+    {
+        var (session, scope) = TestHelpers.CreateSession();
+        using (scope)
+        {
+            var command = Assert.Single(Create().Commands, c => c.Id == "ui.theme");
+            var context = new CommandContext(scope.ServiceProvider);
+
+            Assert.Equal(DevToolsTheme.Auto, session.Ui.Theme);
+            await command.ExecuteAsync(context, null);
+            Assert.Equal(DevToolsTheme.Dark, session.Ui.Theme);
+            await command.ExecuteAsync(context, null);
+            Assert.Equal(DevToolsTheme.Light, session.Ui.Theme);
+            await command.ExecuteAsync(context, null);
+            Assert.Equal(DevToolsTheme.Auto, session.Ui.Theme);
+            Assert.Equal(3, context.PersistPreferencesCalls);
+
+            session.Ui.IsOpen = true;
+            var close = Create().Commands.Single(c => c.Id == "ui.close");
+            await close.ExecuteAsync(context, null);
+            Assert.False(session.Ui.IsOpen);
+            Assert.Equal(4, context.PersistPreferencesCalls);
+        }
+    }
+
+    private sealed class CommandContext(IServiceProvider services) : IDevToolsCommandContext
+    {
+        public IServiceProvider Services => services;
+
+        public int ShowPanelCalls { get; private set; }
+
+        public void ShowPanel(string panelId, string? query = null) => ShowPanelCalls++;
+
+        public int PersistPreferencesCalls { get; private set; }
+
+        public void PersistPreferences() => PersistPreferencesCalls++;
+
+        public void SelectComponent(long instanceId) { }
+
+        public void SelectEvent(long eventId) { }
+
+        public void Notify(string message) { }
     }
 }

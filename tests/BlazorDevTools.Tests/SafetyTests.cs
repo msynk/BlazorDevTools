@@ -189,13 +189,22 @@ public class SafetyTests
         var (session, scope) = TestHelpers.CreateSession(o => o.MaxTrackedComponents = 2);
         using (scope)
         {
+            var tracked = new List<ComponentRecord>();
             for (var i = 0; i < 5; i++)
             {
-                session.Components.Register(new ChildComponent(), typeof(ChildComponent), isDevTools: false, isHidden: false);
+                var record = session.Components.Register(new ChildComponent(), typeof(ChildComponent), isDevTools: false, isHidden: false);
+                if (record is not null)
+                {
+                    tracked.Add(record);
+                }
             }
 
             Assert.Equal(2, session.Components.TrackedCount);
             Assert.True(session.Components.IsTruncated);
+            tracked[0].IsDisposed = true;
+            session.Components.ClearDisposed();
+            Assert.True(session.Components.IsTruncated);
+            Assert.Equal(1, session.Components.TrackedCount);
         }
     }
 
@@ -210,6 +219,22 @@ public class SafetyTests
         var options = provider.GetRequiredService<DevToolsOptions>();
         Assert.Equal(17, options.MaxEvents);
         Assert.True(provider.GetRequiredService<DevToolsRegistry>().IsEnabled);
+    }
+
+    [Fact]
+    public void Second_registration_can_enable_a_previously_disabled_registration()
+    {
+        var services = new ServiceCollection();
+        services.AddBlazorDevTools(o => o.Enabled = false);
+        services.AddBlazorDevTools(o => o.Enabled = true);
+
+        using var provider = services.BuildServiceProvider();
+        Assert.True(provider.GetRequiredService<DevToolsRegistry>().IsEnabled);
+        Assert.True(provider.GetRequiredService<DevToolsOptions>().ResolvedEnabled);
+        Assert.Contains(services, d => d.ServiceType == typeof(Microsoft.AspNetCore.Components.IComponentActivator)
+            && d.ImplementationType == typeof(Instrumentation.DevToolsComponentActivator));
+        Assert.Single(services, d => d.ServiceType == typeof(Microsoft.Extensions.Http.IHttpMessageHandlerBuilderFilter)
+            && d.ImplementationType == typeof(Instrumentation.DevToolsHttpFilter));
     }
 
     [Fact]

@@ -1,0 +1,8 @@
+{
+  "name": "blazor-devtools-browser-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test devtools.test.mjs"
+  }
+}

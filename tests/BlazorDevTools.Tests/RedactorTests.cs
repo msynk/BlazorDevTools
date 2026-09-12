@@ -27,6 +27,17 @@ public class RedactorTests
     }
 
     [Fact]
+    public void Jwt_values_are_redacted_even_under_innocent_query_names()
+    {
+        var jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature";
+        var redacted = Redactor.Default.RedactUrl("https://example.com/callback?session=" + jwt + "&page=2");
+
+        Assert.Equal("https://example.com/callback?session=" + Redactor.RedactedValue + "&page=2", redacted);
+        Assert.Equal("https://example.com/callback?auth=" + Redactor.RedactedValue,
+            Redactor.Default.RedactUrl("https://example.com/callback?auth=Bearer+opaque"));
+    }
+
+    [Fact]
     public void Custom_patterns_are_honoured()
     {
         var redactor = new Redactor(["ssn", "iban"]);

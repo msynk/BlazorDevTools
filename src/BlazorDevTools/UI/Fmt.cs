@@ -83,7 +83,7 @@ public sealed class QueryFilter
         {
             var colon = part.IndexOf(':');
             var gt = part.IndexOf('>');
-            if (colon > 0 && colon < part.Length - 1)
+            if (colon > 0 && colon < part.Length - 1 && !part.AsSpan(colon + 1).StartsWith("//", StringComparison.Ordinal))
             {
                 filter.Tokens[part[..colon]] = part[(colon + 1)..];
             }

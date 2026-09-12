@@ -1,10 +1,13 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 
 namespace BlazorDevTools.Inspection;
 
 /// <summary>Decides which member, header and query names are sensitive. Case-insensitive substring match plus <see cref="DevToolsSensitiveAttribute"/>.</summary>
 public sealed class Redactor
 {
+    private static readonly Regex JwtPattern = new(@"ey[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.", RegexOptions.CultureInvariant);
+
     public const string RedactedValue = "«redacted»";
 
     private readonly string[] _patterns;
@@ -60,7 +63,8 @@ public sealed class Redactor
         {
             var eq = parts[i].IndexOf('=');
             var key = eq < 0 ? parts[i] : parts[i][..eq];
-            if (IsSensitiveName(Uri.UnescapeDataString(key)))
+            var value = eq < 0 ? string.Empty : Uri.UnescapeDataString(parts[i][(eq + 1)..].Replace('+', ' '));
+            if (IsSensitiveName(Uri.UnescapeDataString(key)) || JwtPattern.IsMatch(value) || value.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             {
                 parts[i] = key + "=" + RedactedValue;
                 changed = true;

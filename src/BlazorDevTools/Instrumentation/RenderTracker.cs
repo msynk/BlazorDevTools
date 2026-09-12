@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using BlazorDevTools.Capabilities;
 using BlazorDevTools.Events;
 using BlazorDevTools.Model;
 using BlazorDevTools.Session;
@@ -50,6 +51,7 @@ internal sealed class RenderTracker
     private readonly DevToolsSession _session;
     private readonly DevToolsOptions _options;
     private readonly Queue<RenderBatchInfo> _awaitingDiff = new();
+    private readonly int _maxAwaitingDiff;
     private RenderBatchInfo? _lastDiffBatch;
     private long _batchSequence;
     private long _renderSequence;
@@ -59,11 +61,14 @@ internal sealed class RenderTracker
     {
         _session = session;
         _options = options;
+        _maxAwaitingDiff = Math.Clamp(options.MaxEvents, 1, 512);
     }
 
     public RenderBatchInfo? CurrentBatch { get; private set; }
 
     public long BatchCount => Volatile.Read(ref _batchSequence);
+
+    public bool DiffAttributionLost { get; private set; }
 
     public void Instrument(ComponentRecord record)
     {
@@ -288,20 +293,20 @@ internal sealed class RenderTracker
         bool newBatch;
         if (renderer is not null && BlazorReflection.CanDetectBatches)
         {
-            int diffCount;
             try
             {
-                diffCount = BlazorReflection.GetUpdatedDiffCount!(renderer);
+                var diffCount = BlazorReflection.GetUpdatedDiffCount!(renderer);
+                // The batch builder's diff list is cleared between batches, so a count of zero means the renderer just
+                // started a new pass. A count lower than what we already attributed means a new pass started with renders
+                // we could not observe (components that do not derive from ComponentBase).
+                newBatch = current is null || current.Closed || diffCount <= 0 || current.Count > diffCount;
             }
             catch
             {
-                diffCount = -1;
+                // A runtime reflection failure must degrade to the documented heuristic. Treating it as a zero diff
+                // count splits every component render into a separate batch and produces confidently wrong data.
+                newBatch = current is null || current.Closed || Stopwatch.GetElapsedTime(_lastRenderEndTicks).TotalMilliseconds > 2;
             }
-
-            // The batch builder's diff list is cleared between batches, so a count of zero means the renderer just
-            // started a new pass. A count lower than what we already attributed means a new pass started with renders
-            // we could not observe (components that do not derive from ComponentBase).
-            newBatch = current is null || current.Closed || diffCount <= 0 || current.Count > diffCount;
         }
         else
         {
@@ -338,12 +343,30 @@ internal sealed class RenderTracker
         }
 
         batch.Closed = true;
-        if (batch.DiffMs is null)
+        batch.RenderedInstanceIds.Clear();
+        if (batch.DiffMs is null && CapabilityReport.MetricsAreSupported()
+            && (_options.UseFrameworkInstrumentation || ActivityObserver.BatchMetricsObserved))
         {
-            _awaitingDiff.Enqueue(batch);
-            while (_awaitingDiff.Count > 32)
+            if (DiffAttributionLost)
             {
-                _awaitingDiff.Dequeue();
+                UpdateBatchEvent(batch);
+                return;
+            }
+
+            _awaitingDiff.Enqueue(batch);
+            if (_awaitingDiff.Count > _maxAwaitingDiff)
+            {
+                _awaitingDiff.Clear();
+                _lastDiffBatch = null;
+                DiffAttributionLost = true;
+                _session.Timeline.Record(new DevToolsEvent
+                {
+                    Kind = DevToolsEventKind.Diagnostic,
+                    Category = "devtools",
+                    Title = "Render-diff attribution disabled",
+                    Detail = $"More than {_maxAwaitingDiff} render batches were awaiting browser acknowledgement. Later diff measurements are omitted rather than attached to the wrong batch.",
+                    Severity = DevToolsSeverity.Warning,
+                });
             }
         }
 
@@ -352,28 +375,25 @@ internal sealed class RenderTracker
 
     private void UpdateBatchEvent(RenderBatchInfo batch)
     {
-        var evt = _session.Timeline.Find(batch.EventId);
-        if (evt is null)
+        _session.Timeline.Update(batch.EventId, evt =>
         {
-            return;
-        }
+            evt.DurationMs = batch.TotalMs;
+            evt.Detail = $"{batch.Count} component{(batch.Count == 1 ? "" : "s")} rendered, {batch.TotalMs:0.00} ms building"
+                + (batch.DiffMs is { } d ? $", {d:0.00} ms diffing" : "")
+                + (batch.DiffSize is { } s ? $", {s} DOM edits" : "");
+            if (batch.Count >= _options.Diagnostics.RenderCascadeSize)
+            {
+                evt.Severity = DevToolsSeverity.Warning;
+            }
 
-        evt.DurationMs = batch.TotalMs;
-        evt.Detail = $"{batch.Count} component{(batch.Count == 1 ? "" : "s")} rendered, {batch.TotalMs:0.00} ms building"
-            + (batch.DiffMs is { } d ? $", {d:0.00} ms diffing" : "")
-            + (batch.DiffSize is { } s ? $", {s} DOM edits" : "");
-        if (batch.Count >= _options.Diagnostics.RenderCascadeSize)
-        {
-            evt.Severity = DevToolsSeverity.Warning;
-        }
-
-        if (evt.Data is Dictionary<string, object?> data)
-        {
-            data["count"] = batch.Count;
-            data["totalMs"] = batch.TotalMs;
-            data["diffMs"] = batch.DiffMs;
-            data["diffSize"] = batch.DiffSize;
-        }
+            if (evt.Data is Dictionary<string, object?> data)
+            {
+                data["count"] = batch.Count;
+                data["totalMs"] = batch.TotalMs;
+                data["diffMs"] = batch.DiffMs;
+                data["diffSize"] = batch.DiffSize;
+            }
+        });
     }
 
     /// <summary>
@@ -387,6 +407,11 @@ internal sealed class RenderTracker
     /// </summary>
     internal void RecordBatchDiff(double diffMs)
     {
+        if (DiffAttributionLost)
+        {
+            return;
+        }
+
         var batch = TakeBatchAwaitingDiff() ?? CurrentBatch;
         if (batch is null)
         {
@@ -408,6 +433,11 @@ internal sealed class RenderTracker
     /// <summary>Called from the <c>aspnetcore.components.render_diff.size</c> measurement, which follows the duration.</summary>
     internal void RecordBatchDiffSize(int diffSize)
     {
+        if (DiffAttributionLost)
+        {
+            return;
+        }
+
         var batch = _lastDiffBatch ?? CurrentBatch;
         if (batch is null)
         {
@@ -422,9 +452,10 @@ internal sealed class RenderTracker
     {
         while (_awaitingDiff.TryDequeue(out var batch))
         {
-            // Stale entries mean a measurement was never delivered for that batch; do not let it shift every later
-            // diff onto the wrong batch.
-            if (batch.DiffMs is null && Stopwatch.GetElapsedTime(batch.StartTicks).TotalSeconds < 5)
+            // Server diff metrics are emitted only after the browser acknowledges the batch. Slow or disconnected
+            // clients can legitimately take far longer than a few seconds, so preserve FIFO attribution until the
+            // configured bounded history evicts the bookkeeping entry.
+            if (batch.DiffMs is null)
             {
                 return batch;
             }

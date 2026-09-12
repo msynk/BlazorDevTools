@@ -1,0 +1,7 @@
+{
+  "name": "blazor-devtools-validation",
+  "private": true,
+  "scripts": {
+    "test": "dotnet test BlazorDevTools.slnx -c Release --nologo && npm test --prefix tests/BlazorDevTools.BrowserTests"
+  }
+}

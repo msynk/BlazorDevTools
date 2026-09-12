@@ -67,7 +67,7 @@
                         }
                         @if (s.ComponentInstanceId is { } cid)
                         {
-                            <dt>Component</dt><dd><a @onclick="() => Host.SelectComponent(cid)">@s.ComponentName #@cid</a></dd>
+                            <dt>Component</dt><dd><button type="button" class="bdt-link" @onclick="() => Host.SelectComponent(cid)">@s.ComponentName #@cid</button></dd>
                         }
                         @if (s.Data is { Count: > 0 })
                         {
@@ -93,7 +93,7 @@
                     }
                     @foreach (var a in _ancestors)
                     {
-                        <div><a @onclick="() => Select(a.Id)"><span class="@Fmt.KindClass(a.Kind)">@Fmt.KindLabel(a.Kind)</span> @a.Title</a> <span class="bdt-muted">@Fmt.Time(a.Timestamp)</span></div>
+                        <div><button type="button" class="bdt-link" @onclick="() => Select(a.Id)"><span class="@Fmt.KindClass(a.Kind)">@Fmt.KindLabel(a.Kind)</span> @a.Title</button> <span class="bdt-muted">@Fmt.Time(a.Timestamp)</span></div>
                     }
                 </div>
             </div>
@@ -106,7 +106,7 @@
                     }
                     @foreach (var c in _children.Take(200))
                     {
-                        <div><a @onclick="() => Select(c.Id)"><span class="@Fmt.KindClass(c.Kind)">@Fmt.KindLabel(c.Kind)</span> @c.Title</a> <span class="bdt-muted">@(c.DurationMs is null ? "" : Fmt.Ms(c.DurationMs))</span></div>
+                        <div><button type="button" class="bdt-link" @onclick="() => Select(c.Id)"><span class="@Fmt.KindClass(c.Kind)">@Fmt.KindLabel(c.Kind)</span> @c.Title</button> <span class="bdt-muted">@(c.DurationMs is null ? "" : Fmt.Ms(c.DurationMs))</span></div>
                     }
                 </div>
             </div>
@@ -115,7 +115,7 @@
                 <div class="bdt-section-body">
                     @foreach (var b in _before)
                     {
-                        <div><a @onclick="() => Select(b.Id)"><span class="@Fmt.KindClass(b.Kind)">@Fmt.KindLabel(b.Kind)</span> @b.Title</a> <span class="bdt-muted">@Fmt.Time(b.Timestamp)</span></div>
+                        <div><button type="button" class="bdt-link" @onclick="() => Select(b.Id)"><span class="@Fmt.KindClass(b.Kind)">@Fmt.KindLabel(b.Kind)</span> @b.Title</button> <span class="bdt-muted">@Fmt.Time(b.Timestamp)</span></div>
                     }
                 </div>
             </div>

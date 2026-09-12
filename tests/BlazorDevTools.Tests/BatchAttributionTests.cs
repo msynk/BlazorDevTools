@@ -80,6 +80,46 @@ public class BatchAttributionTests : BunitContext
     }
 
     [Fact]
+    public void Queue_overflow_disables_attribution_instead_of_shifting_measurements()
+    {
+        using var context = new BunitContext();
+        context.Services.AddBlazorDevTools(options =>
+        {
+            options.Enabled = true;
+            options.UseFrameworkInstrumentation = false;
+            options.MaxEvents = 4;
+        });
+        var session = context.Services.GetRequiredService<Session.DevToolsSession>();
+        var cut = context.Render<ParentComponent>();
+        var batches = new List<RenderBatchInfo>();
+
+        for (var i = 0; i < 6; i++)
+        {
+            batches.Add(session.RenderTracker.CurrentBatch!);
+            session.RenderTracker.CloseBatch();
+            if (i < 5)
+            {
+                cut.InvokeAsync(() => cut.Instance.Refresh());
+            }
+        }
+
+        session.RenderTracker.RecordBatchDiff(1);
+        session.RenderTracker.RecordBatchDiffSize(10);
+        session.RenderTracker.RecordBatchDiff(2);
+        session.RenderTracker.RecordBatchDiffSize(20);
+        session.RenderTracker.RecordBatchDiff(3);
+        session.RenderTracker.RecordBatchDiffSize(30);
+
+        Assert.True(session.RenderTracker.DiffAttributionLost);
+        Assert.All(batches, batch =>
+        {
+            Assert.Null(batch.DiffMs);
+            Assert.Null(batch.DiffSize);
+        });
+        Assert.Contains(session.Timeline.Snapshot(), e => e.Title == "Render-diff attribution disabled");
+    }
+
+    [Fact]
     public void Devtools_own_interactions_are_not_recorded_as_application_events()
     {
         Render<PanelLikeComponent>();

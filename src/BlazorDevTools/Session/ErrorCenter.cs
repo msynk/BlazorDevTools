@@ -38,13 +38,13 @@ internal sealed partial class ErrorCenter
         message ??= exception?.Message ?? "Unknown error";
         stackTrace ??= exception?.StackTrace;
         var location = FindSourceLocation(stackTrace);
-        var fingerprint = string.Concat(source, "|", exceptionType, "|", message, "|", location ?? FirstLine(stackTrace));
+        var fingerprint = string.Concat(source, "|", exceptionType, "|", message, "|", location ?? FirstLine(stackTrace), "|", component?.InstanceId);
         var now = DateTimeOffset.UtcNow;
-        Interlocked.Increment(ref _total);
         component?.AddError();
 
         lock (_lock)
         {
+            _total++;
             var existing = _errors.FindLast(e => e.Fingerprint == fingerprint);
             if (existing is not null && now - existing.LastSeen < TimeSpan.FromMinutes(1))
             {
@@ -67,11 +67,15 @@ internal sealed partial class ErrorCenter
                 SourceLocation = location,
                 ComponentInstanceId = component?.InstanceId,
                 ComponentName = component?.DisplayName,
-                PrecedingEventId = precedingEventId ?? _session.LastUiEventId,
+                PrecedingEventId = precedingEventId ?? _session.CurrentTriggerEventId,
                 Fingerprint = fingerprint,
                 InnerError = Describe(exception?.InnerException),
             };
-            _errors.Add(record);
+            if (_errors.Add(record, out var evicted) && evicted is not null)
+            {
+                _total -= evicted.Count;
+            }
+
             RecordTimeline(record, repeat: false);
             _session.Touch();
             return record;
@@ -104,7 +108,12 @@ internal sealed partial class ErrorCenter
 
     public void Clear()
     {
-        _errors.Clear();
+        lock (_lock)
+        {
+            _errors.Clear();
+            _total = 0;
+        }
+
         _session.Touch();
     }
 

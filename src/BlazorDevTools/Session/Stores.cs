@@ -8,8 +8,10 @@ internal sealed class HttpStore
 {
     private readonly DevToolsSession _session;
     private readonly RingBuffer<HttpRecord> _requests;
+    private readonly object _lock = new();
     private long _nextId;
     private int _failed;
+    private int _generation;
 
     public HttpStore(DevToolsSession session, DevToolsOptions options)
     {
@@ -25,11 +27,31 @@ internal sealed class HttpStore
 
     public void Add(HttpRecord record)
     {
-        _requests.Add(record);
+        lock (_lock)
+        {
+            record.StoreGeneration = _generation;
+            if (_requests.Add(record, out var evicted) && evicted?.FailureCounted == true)
+            {
+                _failed--;
+            }
+        }
+
         _session.Touch();
     }
 
-    public void MarkFailed() => Interlocked.Increment(ref _failed);
+    public void MarkFailed(HttpRecord record)
+    {
+        lock (_lock)
+        {
+            if (!record.FailureCounted
+                && record.StoreGeneration == _generation
+                && ReferenceEquals(_requests.FindByKey(static r => r.Id, record.Id), record))
+            {
+                record.FailureCounted = true;
+                _failed++;
+            }
+        }
+    }
 
     public HttpRecord[] Snapshot() => _requests.ToArray();
 
@@ -37,7 +59,13 @@ internal sealed class HttpStore
 
     public void Clear()
     {
-        _requests.Clear();
+        lock (_lock)
+        {
+            _generation++;
+            _requests.Clear();
+            _failed = 0;
+        }
+
         _session.Touch();
     }
 

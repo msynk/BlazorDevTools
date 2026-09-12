@@ -17,12 +17,12 @@
                 <table>
                     <thead><tr><th>Time</th><th>Source</th><th>Error</th><th>Component</th><th class="bdt-num">×</th></tr></thead>
                     <tbody>
-                        <Virtualize Items="_rows" ItemSize="23" Context="e">
+                        <Virtualize Items="_rows" ItemSize="23" Context="e" SpacerElement="tr">
                             <tr class="bdt-row bdt-sev-error @(Ui.SelectedErrorId == e.Id ? "bdt-selected" : "")" @onclick="() => { Ui.SelectedErrorId = e.Id; Ui.Touch(); }">
                                 <td class="bdt-mono">@Fmt.Time(e.LastSeen)</td>
                                 <td><span class="bdt-chip">@e.Source</span></td>
                                 <td class="bdt-truncate" style="max-width:360px" title="@e.Message"><span class="bdt-mono">@ErrorCenter.ShortTypeName(e.ExceptionType)</span>: @e.Message</td>
-                                <td>@if (e.ComponentInstanceId is { } id) { <a @onclick:stopPropagation="true" @onclick="() => Host.SelectComponent(id)">@e.ComponentName</a> }</td>
+                                <td>@if (e.ComponentInstanceId is { } id) { <button type="button" class="bdt-link" @onclick:stopPropagation="true" @onclick="() => Host.SelectComponent(id)">@e.ComponentName</button> }</td>
                                 <td class="bdt-num">@(e.Count > 1 ? e.Count : "")</td>
                             </tr>
                         </Virtualize>
@@ -47,11 +47,11 @@
                         }
                         @if (s.ComponentInstanceId is { } cid)
                         {
-                            <dt>Component</dt><dd><a @onclick="() => Host.SelectComponent(cid)">@s.ComponentName #@cid ↗</a></dd>
+                            <dt>Component</dt><dd><button type="button" class="bdt-link" @onclick="() => Host.SelectComponent(cid)">@s.ComponentName #@cid ↗</button></dd>
                         }
                         <dt>Preceded by</dt>
-                        <dd>@if (_preceding is { } p) { <a @onclick="() => Host.SelectEvent(p.Id)"><span class="@Fmt.KindClass(p.Kind)">@Fmt.KindLabel(p.Kind)</span> @p.Title ↗</a> } else { <span class="bdt-muted">no UI event recorded before this error</span> }</dd>
-                        <dt>Timeline</dt><dd><a @onclick="() => Host.SelectEvent(s.TimelineEventId)">open ↗</a></dd>
+                        <dd>@if (_preceding is { } p) { <button type="button" class="bdt-link" @onclick="() => Host.SelectEvent(p.Id)"><span class="@Fmt.KindClass(p.Kind)">@Fmt.KindLabel(p.Kind)</span> @p.Title ↗</button> } else { <span class="bdt-muted">no UI event recorded before this error</span> }</dd>
+                        <dt>Timeline</dt><dd><button type="button" class="bdt-link" @onclick="() => Host.SelectEvent(s.TimelineEventId)">open ↗</button></dd>
                     </dl>
                     @if (s.InnerError is { } inner)
                     {
@@ -73,7 +73,7 @@
                     }
                     @foreach (var b in _before)
                     {
-                        <div><a @onclick="() => Host.SelectEvent(b.Id)"><span class="@Fmt.KindClass(b.Kind)">@Fmt.KindLabel(b.Kind)</span> @b.Title</a> <span class="bdt-muted">@Fmt.Time(b.Timestamp)</span></div>
+                        <div><button type="button" class="bdt-link" @onclick="() => Host.SelectEvent(b.Id)"><span class="@Fmt.KindClass(b.Kind)">@Fmt.KindLabel(b.Kind)</span> @b.Title</button> <span class="bdt-muted">@Fmt.Time(b.Timestamp)</span></div>
                     }
                 </div>
             </div>

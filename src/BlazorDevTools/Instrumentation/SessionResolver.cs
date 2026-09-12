@@ -20,7 +20,7 @@ internal static class SessionResolver
     private static readonly object Lock = new();
     private static readonly List<WeakReference<DevToolsSession>> Sessions = [];
     private static readonly AsyncLocal<DevToolsSession?> Ambient = new();
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SynchronizationContext, DevToolsSession> ByContext = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SynchronizationContext, WeakReference<DevToolsSession>> ByContext = new();
     private static DevToolsSession?[] _cache = [];
 
     public static void Register(DevToolsSession session)
@@ -56,7 +56,7 @@ internal static class SessionResolver
         }
 
         session.SynchronizationContextNoted = true;
-        ByContext.AddOrUpdate(context, session);
+        ByContext.AddOrUpdate(context, new WeakReference<DevToolsSession>(session));
     }
 
     public static int LiveSessionCount => Volatile.Read(ref _cache).Length;
@@ -69,7 +69,10 @@ internal static class SessionResolver
             return ambient;
         }
 
-        if (SynchronizationContext.Current is { } context && ByContext.TryGetValue(context, out var byContext) && !byContext.IsDisposed)
+        if (SynchronizationContext.Current is { } context
+            && ByContext.TryGetValue(context, out var reference)
+            && reference.TryGetTarget(out var byContext)
+            && !byContext.IsDisposed)
         {
             return byContext;
         }

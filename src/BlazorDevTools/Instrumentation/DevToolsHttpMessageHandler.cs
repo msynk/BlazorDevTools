@@ -92,7 +92,7 @@ public sealed class DevToolsHttpMessageHandler : DelegatingHandler
             var failed = record.StatusCode >= 400;
             if (failed)
             {
-                session.Http.MarkFailed();
+                session.Http.MarkFailed(record);
             }
 
             var severity = failed ? DevToolsSeverity.Error : record.DurationMs >= _options.Diagnostics.SlowHttpMs ? DevToolsSeverity.Warning : DevToolsSeverity.Info;
@@ -109,7 +109,7 @@ public sealed class DevToolsHttpMessageHandler : DelegatingHandler
         {
             record.DurationMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             record.Error = ex.GetType().Name + ": " + ex.Message;
-            session.Http.MarkFailed();
+            session.Http.MarkFailed(record);
             session.Timeline.Complete(record.TimelineEventId, record.DurationMs.Value, record.Error, DevToolsSeverity.Error);
             if (ex is not OperationCanceledException)
             {

@@ -52,6 +52,17 @@ public class CircuitRegistryTests
     }
 
     [Fact]
+    public void A_later_core_registration_can_enable_server_circuit_instrumentation()
+    {
+        var services = new ServiceCollection();
+        services.AddBlazorDevToolsServer(options => options.Enabled = false);
+        services.AddBlazorDevTools(options => options.Enabled = true);
+
+        Assert.Contains(services, descriptor => descriptor.ServiceType == typeof(CircuitHandler)
+            && descriptor.ImplementationType == typeof(DevToolsCircuitHandler));
+    }
+
+    [Fact]
     public void Circuit_instability_rule_fires_on_repeated_disconnects()
     {
         var (session, scope) = TestHelpers.CreateSession(o => o.Extensions.Add(new ServerDevToolsExtension()));

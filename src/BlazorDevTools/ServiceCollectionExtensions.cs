@@ -35,6 +35,15 @@ public static class BlazorDevToolsServiceCollectionExtensions
         if (services.FirstOrDefault(d => d.ServiceType == typeof(DevToolsOptions))?.ImplementationInstance is DevToolsOptions existing)
         {
             configure?.Invoke(existing);
+            var (mergedEnabled, mergedReason) = ResolveEnabled(services, existing);
+            existing.ResolvedEnabled = mergedEnabled;
+            ReplaceRegistry(services, existing, mergedEnabled, mergedReason);
+            if (mergedEnabled)
+            {
+                RegisterInstrumentation(services, existing);
+            }
+
+            ApplyServiceRegistrations(services, mergedEnabled);
             return services;
         }
 
@@ -44,31 +53,19 @@ public static class BlazorDevToolsServiceCollectionExtensions
         options.ResolvedEnabled = enabled;
 
         services.AddSingleton(options);
-        services.AddSingleton(sp => new DevToolsRegistry(options, enabled, reason, services));
+        ReplaceRegistry(services, options, enabled, reason);
 
         services.AddScoped<DevToolsSession>();
         services.AddScoped<IDevToolsTimeline>(sp => sp.GetRequiredService<DevToolsSession>().TimelineApi);
         services.AddScoped<IStateProviderRegistry>(sp => sp.GetRequiredService<DevToolsSession>().StateProviders);
+        ApplyServiceRegistrations(services, enabled);
 
         if (!enabled)
         {
             return services;
         }
 
-        // The framework only registers its own ActivitySource/meters for server-side rendering. Registering them here
-        // is what makes "why did this render?" work in WebAssembly and in any other host; both calls are public,
-        // idempotent, and produce no measurable cost while nothing listens.
-        if (options.UseFrameworkInstrumentation)
-        {
-            ComponentsMetricsServiceCollectionExtensions.AddComponentsTracing(services);
-            ComponentsMetricsServiceCollectionExtensions.AddComponentsMetrics(services);
-        }
-
-        WrapExistingActivator(services);
-        services.AddScoped<IComponentActivator, DevToolsComponentActivator>();
-
-        services.AddSingleton<IHttpMessageHandlerBuilderFilter, DevToolsHttpFilter>();
-        services.AddSingleton<ILoggerProvider, DevToolsLoggerProvider>();
+        RegisterInstrumentation(services, options);
 
         return services;
     }
@@ -92,8 +89,68 @@ public static class BlazorDevToolsServiceCollectionExtensions
     /// <summary>Exposes an already registered service as a state provider through an adapter.</summary>
     public static IServiceCollection AddDevToolsStateProvider<TService>(this IServiceCollection services, string name, Func<TService, object?> snapshot, Action<TService, Action>? subscribe = null) where TService : class
     {
+        var serviceLifetime = services.LastOrDefault(d => d.ServiceType == typeof(TService) && !d.IsKeyedService)?.Lifetime;
+        var adapterLifetime = serviceLifetime == ServiceLifetime.Singleton ? ServiceLifetime.Singleton : ServiceLifetime.Scoped;
+        services.Add(ServiceDescriptor.Describe(
+            typeof(IStateProvider),
+            sp => new DelegateStateProvider<TService>(sp.GetRequiredService<TService>(), name, snapshot, subscribe),
+            adapterLifetime));
+        return services;
+    }
+
+    /// <summary>
+    /// Exposes an already registered service as a state provider through an adapter whose subscription is released
+    /// with the DevTools scope. Prefer this overload when the observed service can outlive the scope.
+    /// </summary>
+    public static IServiceCollection AddDevToolsStateProviderWithSubscription<TService>(this IServiceCollection services, string name, Func<TService, object?> snapshot, Func<TService, Action, IDisposable> subscribe) where TService : class
+    {
+        ArgumentNullException.ThrowIfNull(subscribe);
         services.AddScoped<IStateProvider>(sp => new DelegateStateProvider<TService>(sp.GetRequiredService<TService>(), name, snapshot, subscribe));
         return services;
+    }
+
+    private static void ReplaceRegistry(IServiceCollection services, DevToolsOptions options, bool enabled, string reason)
+    {
+        var previous = services.FirstOrDefault(d => d.ServiceType == typeof(DevToolsRegistry));
+        if (previous is not null)
+        {
+            services.Remove(previous);
+        }
+
+        services.AddSingleton(sp => new DevToolsRegistry(options, enabled, reason, services));
+    }
+
+    private static void RegisterInstrumentation(IServiceCollection services, DevToolsOptions options)
+    {
+        // The framework only registers its own ActivitySource/meters for server-side rendering. Registering them here
+        // is what makes "why did this render?" work in WebAssembly and in any other host; both calls are public and
+        // idempotent.
+        if (options.UseFrameworkInstrumentation)
+        {
+            ComponentsMetricsServiceCollectionExtensions.AddComponentsTracing(services);
+            ComponentsMetricsServiceCollectionExtensions.AddComponentsMetrics(services);
+        }
+
+        if (!services.Any(d => d.ServiceType == typeof(IComponentActivator) && d.ImplementationType == typeof(DevToolsComponentActivator)))
+        {
+            WrapExistingActivator(services);
+            services.AddScoped<IComponentActivator, DevToolsComponentActivator>();
+        }
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHttpMessageHandlerBuilderFilter, DevToolsHttpFilter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, DevToolsLoggerProvider>());
+    }
+
+    private static void ApplyServiceRegistrations(IServiceCollection services, bool enabled)
+    {
+        foreach (var registration in services
+            .Where(descriptor => descriptor.ServiceType == typeof(IDevToolsServiceRegistration))
+            .Select(descriptor => descriptor.ImplementationInstance)
+            .OfType<IDevToolsServiceRegistration>()
+            .ToArray())
+        {
+            registration.Apply(services, enabled);
+        }
     }
 
     private static void WrapExistingActivator(IServiceCollection services)
@@ -171,6 +228,8 @@ public static class BlazorDevToolsServiceCollectionExtensions
     {
         private readonly TService _service;
         private readonly Func<TService, object?> _snapshot;
+        private IDisposable? _subscription;
+        private int _disposed;
 
         public DelegateStateProvider(TService service, string name, Func<TService, object?> snapshot, Action<TService, Action>? subscribe)
         {
@@ -180,26 +239,44 @@ public static class BlazorDevToolsServiceCollectionExtensions
             subscribe?.Invoke(service, Raise);
         }
 
+        public DelegateStateProvider(TService service, string name, Func<TService, object?> snapshot, Func<TService, Action, IDisposable> subscribe)
+        {
+            _service = service;
+            _snapshot = snapshot;
+            Name = name;
+            _subscription = subscribe(service, Raise);
+        }
+
         public string Name { get; }
 
         public string? Description => BlazorDevTools.Model.TypeNames.Short(typeof(TService));
 
-        public object? GetSnapshot() => IsDisposed ? null : _snapshot(_service);
-
-        private bool IsDisposed { get; set; }
+        public object? GetSnapshot() => Volatile.Read(ref _disposed) != 0 ? null : _snapshot(_service);
 
         private void Raise()
         {
-            if (!IsDisposed)
+            if (Volatile.Read(ref _disposed) == 0)
             {
                 Changed?.Invoke(StateChangeInfo.Empty);
             }
         }
 
-        // The subscription lives in the application service, which may outlive this scope (a singleton store observed
-        // from a circuit). Disposal cannot unhook an arbitrary callback, so the adapter goes inert instead.
-        public void Dispose() => IsDisposed = true;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref _subscription, null)?.Dispose();
+            Changed = null;
+        }
 
         public event Action<StateChangeInfo>? Changed;
     }
+}
+
+internal interface IDevToolsServiceRegistration
+{
+    void Apply(IServiceCollection services, bool enabled);
 }

@@ -5,7 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <NoWarn>$(NoWarn);CS1591;xUnit1031</NoWarn>
+    <!-- Scale fixtures intentionally generate repeated siblings, so dynamic sequence numbers are required there. -->
+    <NoWarn>$(NoWarn);CS1591;xUnit1031;ASP0006</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

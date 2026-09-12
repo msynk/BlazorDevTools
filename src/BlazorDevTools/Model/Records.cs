@@ -43,6 +43,10 @@ public sealed class ErrorRecord
 
 public sealed class HttpRecord
 {
+    internal int StoreGeneration { get; set; }
+
+    internal bool FailureCounted { get; set; }
+
     public required long Id { get; init; }
 
     public required DateTimeOffset StartedAt { get; init; }

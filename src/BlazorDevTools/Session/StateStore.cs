@@ -31,12 +31,24 @@ public sealed class StateProviderEntry
 
     internal RingBuffer<StateChangeRecord> History { get; }
 
+    internal object SyncRoot { get; } = new();
+
+    internal int Generation { get; set; }
+
+    internal long NotificationSequence { get; set; }
+
+    internal long NextCommitSequence { get; set; } = 1;
+
+    internal Dictionary<long, PendingStateChange> PendingChanges { get; } = [];
+
     internal Dictionary<string, string>? LastSnapshot { get; set; }
 
     public StateChangeRecord[] Changes => History.ToArray();
 
     public string? Error { get; internal set; }
 }
+
+internal sealed record PendingStateChange(StateChangeInfo Info, DateTimeOffset At, long? TriggerEventId, Dictionary<string, string>? Snapshot, string? Error);
 
 /// <summary>Tracks registered state providers, records changes and computes before/after diffs.</summary>
 internal sealed class StateStore : IStateProviderRegistry, IDisposable
@@ -95,11 +107,21 @@ internal sealed class StateStore : IStateProviderRegistry, IDisposable
 
         try
         {
-            entry.LastSnapshot = _session.Inspector.Flatten(provider.GetSnapshot());
+            var snapshot = _session.Inspector.Flatten(provider.GetSnapshot());
+            lock (entry.SyncRoot)
+            {
+                if (entry.LastSnapshot is null)
+                {
+                    entry.LastSnapshot = snapshot;
+                }
+            }
         }
         catch (Exception ex)
         {
-            entry.Error = ex.GetType().Name + ": " + ex.Message;
+            lock (entry.SyncRoot)
+            {
+                entry.Error = ex.GetType().Name + ": " + ex.Message;
+            }
         }
 
         _session.Touch();
@@ -110,6 +132,16 @@ internal sealed class StateStore : IStateProviderRegistry, IDisposable
     {
         lock (_lock)
         {
+            var entry = _entries.FirstOrDefault(e => ReferenceEquals(e.Provider, provider));
+            if (entry is not null)
+            {
+                lock (entry.SyncRoot)
+                {
+                    entry.Generation++;
+                    entry.PendingChanges.Clear();
+                }
+            }
+
             if (_handlers.Remove(provider, out var handler))
             {
                 provider.Changed -= handler;
@@ -129,47 +161,137 @@ internal sealed class StateStore : IStateProviderRegistry, IDisposable
         }
 
         var start = Stopwatch.GetTimestamp();
-        Dictionary<string, string> snapshot;
+        int generation;
+        long sequence;
+        lock (entry.SyncRoot)
+        {
+            generation = entry.Generation;
+            sequence = ++entry.NotificationSequence;
+        }
+
+        Dictionary<string, string>? snapshot = null;
+        string? error = null;
+        var at = DateTimeOffset.UtcNow;
+        var triggerEventId = _session.CurrentTriggerEventId;
         try
         {
             snapshot = _session.Inspector.Flatten(entry.Provider.GetSnapshot());
-            entry.Error = null;
         }
         catch (Exception ex)
         {
-            entry.Error = ex.GetType().Name + ": " + ex.Message;
-            return;
+            error = ex.GetType().Name + ": " + ex.Message;
         }
 
-        var changes = ObjectInspector.Diff(entry.LastSnapshot, snapshot);
-        entry.LastSnapshot = snapshot;
-        entry.ChangeCount++;
-        entry.LastChangedAt = DateTimeOffset.UtcNow;
-
-        var record = new StateChangeRecord
+        lock (entry.SyncRoot)
         {
-            Id = Interlocked.Increment(ref _nextId),
-            At = entry.LastChangedAt.Value,
-            Provider = entry.Name,
-            Action = info?.Action,
-            Detail = info?.Detail,
-            Changes = changes,
-            Snapshot = snapshot,
-            TriggerEventId = _session.CurrentTriggerEventId,
-        };
-        entry.History.Add(record);
+            if (generation != entry.Generation)
+            {
+                return;
+            }
 
-        var title = string.IsNullOrEmpty(info?.Action) ? entry.Name + " changed" : entry.Name + ": " + info!.Action;
-        record.TimelineEventId = _session.Timeline.Record(new DevToolsEvent
-        {
-            Kind = DevToolsEventKind.StateChange,
-            Category = "state:" + entry.Name,
-            Title = title,
-            Detail = changes.Count == 0 ? "no observable member changes" : string.Join(", ", changes.Take(6).Select(c => c.Path + (c.Kind == "changed" ? ": " + c.Before + " → " + c.After : " (" + c.Kind + ")"))) + (changes.Count > 6 ? $" … +{changes.Count - 6}" : ""),
-            ParentEventId = record.TriggerEventId,
-            Data = new Dictionary<string, object?> { ["provider"] = entry.Name, ["changeId"] = record.Id, ["changes"] = changes.Count },
-        });
+            entry.PendingChanges[sequence] = new PendingStateChange(info, at, triggerEventId, snapshot, error);
+            if (entry.PendingChanges.Count > _options.MaxStateChangesPerProvider)
+            {
+                entry.Generation++;
+                entry.NotificationSequence = 0;
+                entry.NextCommitSequence = 1;
+                entry.PendingChanges.Clear();
+                entry.Error = "Concurrent state notification backlog exceeded the configured history limit; pending changes were dropped.";
+                return;
+            }
+
+            while (entry.PendingChanges.Remove(entry.NextCommitSequence, out var pending))
+            {
+                entry.NextCommitSequence++;
+                if (pending.Error is not null || pending.Snapshot is null)
+                {
+                    entry.Error = pending.Error;
+                    continue;
+                }
+
+                entry.Error = null;
+                var changes = ObjectInspector.Diff(entry.LastSnapshot, pending.Snapshot);
+                entry.LastSnapshot = pending.Snapshot;
+                entry.ChangeCount++;
+                entry.LastChangedAt = pending.At;
+
+                var record = new StateChangeRecord
+                {
+                    Id = Interlocked.Increment(ref _nextId),
+                    At = entry.LastChangedAt.Value,
+                    Provider = entry.Name,
+                    Action = pending.Info?.Action,
+                    Detail = pending.Info?.Detail,
+                    Changes = changes,
+                    Snapshot = pending.Snapshot,
+                    TriggerEventId = pending.TriggerEventId,
+                };
+                entry.History.Add(record);
+
+                var title = string.IsNullOrEmpty(pending.Info?.Action) ? entry.Name + " changed" : entry.Name + ": " + pending.Info!.Action;
+                record.TimelineEventId = _session.Timeline.Record(new DevToolsEvent
+                {
+                    Kind = DevToolsEventKind.StateChange,
+                    Category = "state:" + entry.Name,
+                    Title = title,
+                    Detail = changes.Count == 0 ? "no observable member changes" : string.Join(", ", changes.Take(6).Select(c => c.Path + (c.Kind == "changed" ? ": " + c.Before + " → " + c.After : " (" + c.Kind + ")"))) + (changes.Count > 6 ? $" … +{changes.Count - 6}" : ""),
+                    ParentEventId = record.TriggerEventId,
+                    Data = new Dictionary<string, object?> { ["provider"] = entry.Name, ["changeId"] = record.Id, ["changes"] = changes.Count },
+                });
+            }
+        }
+
         _session.Overhead.AddInspection(Stopwatch.GetElapsedTime(start).Ticks);
+        _session.Touch();
+    }
+
+    public void ClearHistory()
+    {
+        StateProviderEntry[] entries;
+        lock (_lock)
+        {
+            entries = _entries.ToArray();
+        }
+
+        foreach (var entry in entries)
+        {
+            int generation;
+            lock (entry.SyncRoot)
+            {
+                generation = ++entry.Generation;
+                entry.NotificationSequence = 0;
+                entry.NextCommitSequence = 1;
+                entry.PendingChanges.Clear();
+                entry.History.Clear();
+                entry.ChangeCount = 0;
+                entry.LastChangedAt = null;
+                entry.LastSnapshot = null;
+                entry.Error = null;
+            }
+
+            try
+            {
+                var snapshot = _session.Inspector.Flatten(entry.Provider.GetSnapshot());
+                lock (entry.SyncRoot)
+                {
+                    if (entry.Generation == generation && entry.LastSnapshot is null)
+                    {
+                        entry.LastSnapshot = snapshot;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                lock (entry.SyncRoot)
+                {
+                    if (entry.Generation == generation)
+                    {
+                        entry.Error = ex.GetType().Name + ": " + ex.Message;
+                    }
+                }
+            }
+        }
+
         _session.Touch();
     }
 
@@ -177,6 +299,15 @@ internal sealed class StateStore : IStateProviderRegistry, IDisposable
     {
         lock (_lock)
         {
+            foreach (var entry in _entries)
+            {
+                lock (entry.SyncRoot)
+                {
+                    entry.Generation++;
+                    entry.PendingChanges.Clear();
+                }
+            }
+
             foreach (var (provider, handler) in _handlers)
             {
                 try

@@ -86,22 +86,23 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
             return;
         }
 
-        if (Options.EnableBrowserBridge)
+        try
         {
-            try
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/BlazorDevTools/devtools.js");
+            if (Options.EnableBrowserBridge)
             {
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/BlazorDevTools/devtools.js");
                 _bridgeRef = DotNetObjectReference.Create(new JsBridge(Session, () => InvokeAsync(() => { Toggle(); StateHasChanged(); })));
                 var snapshot = await _module.InvokeAsync<BrowserSnapshot>("attach", _bridgeRef, new { shortcut = Options.Ui.ToggleShortcut, trackJsToDotNet = Options.TrackJsInterop });
                 ApplySnapshot(snapshot);
                 Session.Browser.BridgeAttached = true;
-                var prefs = await _module.InvokeAsync<string?>("loadPrefs");
-                ApplyPrefs(prefs);
             }
-            catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException)
-            {
-                Session.Browser.BridgeError = ex.Message;
-            }
+
+            var prefs = await _module.InvokeAsync<string?>("loadPrefs");
+            ApplyPrefs(prefs);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException)
+        {
+            Session.Browser.BridgeError = ex.Message;
         }
 
         _loop = RefreshLoopAsync(_cts.Token);
@@ -155,7 +156,7 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
             Category = "navigation",
             Title = "Navigate to /" + Navigation.ToBaseRelativePath(e.Location),
             Detail = e.IsNavigationIntercepted ? "intercepted link" : "programmatic",
-            ParentEventId = Session.LastUiEventId,
+            ParentEventId = Session.CurrentTriggerEventId,
         });
     }
 
@@ -212,7 +213,7 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
                 Ui.Size = size;
             }
 
-            if (!string.IsNullOrEmpty(prefs.Panel))
+            if (!string.IsNullOrEmpty(prefs.Panel) && IsPanelAvailable(prefs.Panel))
             {
                 Ui.ActivePanelId = prefs.Panel;
             }
@@ -221,6 +222,10 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
         {
         }
     }
+
+    private bool IsPanelAvailable(string panelId) =>
+        BuiltInPanels.Any(p => string.Equals(p.Id, panelId, StringComparison.Ordinal)) ||
+        ExtensionPanels.Any(p => string.Equals(p.Id, panelId, StringComparison.Ordinal));
 
     private async Task SavePrefsAsync()
     {
@@ -277,6 +282,15 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
 
     public void SelectComponent(long instanceId)
     {
+        if (!Options.CaptureComponentStateOnRender && Ui.SelectedComponentId is { } previousId && previousId != instanceId)
+        {
+            var previous = Session.Components.Get(previousId);
+            if (previous is not null)
+            {
+                previous.CaptureState = false;
+            }
+        }
+
         Ui.SelectedComponentId = instanceId;
         var record = Session.Components.Get(instanceId);
         if (record is not null)
@@ -317,6 +331,8 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
         Ui.Notify(message);
         StateHasChanged();
     }
+
+    public void PersistPreferences() => _ = SavePrefsAsync();
 
     public void Refresh() => StateHasChanged();
 
@@ -452,6 +468,17 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
     public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
+        if (_loop is not null)
+        {
+            try
+            {
+                await _loop;
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+            {
+            }
+        }
+
         if (_interactive)
         {
             Navigation.LocationChanged -= OnLocationChanged;

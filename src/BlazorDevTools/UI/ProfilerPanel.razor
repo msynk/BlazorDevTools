@@ -23,7 +23,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <Virtualize Items="_rows" ItemSize="23" Context="r">
+                    <Virtualize Items="_rows" ItemSize="23" Context="r" SpacerElement="tr">
                         <tr class="bdt-row @(Ui.SelectedComponentId == r.InstanceId ? "bdt-selected" : "")" @onclick="() => Host.SelectComponent(r.InstanceId)">
                             <td class="bdt-mono bdt-truncate" style="max-width:220px" title="@r.TypeName">@r.DisplayName @(r.IsDisposed ? "†" : "")</td>
                             <td class="bdt-num">@r.RenderCount</td>

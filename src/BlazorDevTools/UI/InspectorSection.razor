@@ -1,7 +1,7 @@
 @namespace BlazorDevTools.UI
 
 <div class="bdt-section">
-    <div class="bdt-section-title" @onclick="() => _open = !_open"><span class="bdt-caret">@(_open ? "▾" : "▸")</span>@Title @if (Subtitle is not null) { <span class="bdt-muted" style="font-weight:normal">@Subtitle</span> }</div>
+    <button type="button" class="bdt-section-title" aria-expanded="@(_open ? "true" : "false")" @onclick="() => _open = !_open"><span class="bdt-caret">@(_open ? "▾" : "▸")</span>@Title @if (Subtitle is not null) { <span class="bdt-muted" style="font-weight:normal">@Subtitle</span> }</button>
     @if (_open)
     {
         <div class="bdt-section-body">@ChildContent</div>
@@ -11,6 +11,7 @@
 @code {
     private bool _open;
     private bool _initialized;
+    private bool _lastCollapsed;
 
     [Parameter, EditorRequired] public string Title { get; set; } = "";
 
@@ -20,12 +21,14 @@
 
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
-    protected override void OnInitialized()
+    protected override void OnParametersSet()
     {
-        if (!_initialized)
+        if (!_initialized || Collapsed != _lastCollapsed)
         {
             _initialized = true;
             _open = !Collapsed;
         }
+
+        _lastCollapsed = Collapsed;
     }
 }

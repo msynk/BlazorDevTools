@@ -9,7 +9,9 @@
                 <div class="bdt-empty">
                     No state providers registered. Implement <code>IStateProvider</code> on your state container and register it
                     (<code>services.AddDevToolsStateProvider&lt;T&gt;()</code>), or adapt an existing service with
-                    <code>AddDevToolsStateProvider&lt;TService&gt;(name, snapshot, subscribe)</code>. Component state is inspected per component in the Components panel.
+                    <code>AddDevToolsStateProvider&lt;TService&gt;(name, snapshot, subscribe)</code>. For a long-lived custom
+                    subscription, use <code>AddDevToolsStateProviderWithSubscription</code> so it is disposed with the scope.
+                    Component state is inspected per component in the Components panel.
                 </div>
             }
             @foreach (var item in _entries)
@@ -44,7 +46,7 @@
                         var c = change;
                         <div class="bdt-ev-row @(_selectedChange?.Id == c.Id ? "bdt-selected" : "")" @onclick="() => _selectedChange = c">
                             <span class="bdt-time">@Fmt.Time(c.At)</span>
-                            <span class="bdt-ev-title">@(c.Action ?? "changed") <span class="bdt-muted">@c.Changes.Count member@(c.Changes.Count == 1 ? "" : "s")</span> @if (c.TriggerEventId is { } t) { <a @onclick:stopPropagation="true" @onclick="() => Host.SelectEvent(t)">trigger ↗</a> }</span>
+                            <span class="bdt-ev-title">@(c.Action ?? "changed") <span class="bdt-muted">@c.Changes.Count member@(c.Changes.Count == 1 ? "" : "s")</span> @if (c.TriggerEventId is { } t) { <button type="button" class="bdt-link" @onclick:stopPropagation="true" @onclick="() => Host.SelectEvent(t)">trigger ↗</button> }</span>
                         </div>
                     }
                 </div>
@@ -52,7 +54,7 @@
             @if (_selectedChange is { } sc)
             {
                 <div class="bdt-section">
-                    <div class="bdt-section-title">Diff @Fmt.Time(sc.At) @(sc.Action) <a style="margin-left:auto;font-weight:normal" @onclick="() => Host.SelectEvent(sc.TimelineEventId)">timeline ↗</a></div>
+                    <div class="bdt-section-title">Diff @Fmt.Time(sc.At) @(sc.Action) <button type="button" class="bdt-link" style="margin-left:auto;font-weight:normal" @onclick="() => Host.SelectEvent(sc.TimelineEventId)">timeline ↗</button></div>
                     <div class="bdt-section-body">
                         @if (sc.Changes.Count == 0)
                         {
@@ -109,6 +111,11 @@
         _entries = Session.State.Entries;
         Ui.SelectedStateProvider ??= _entries.FirstOrDefault()?.Name;
         _selected = _entries.FirstOrDefault(e => e.Name == Ui.SelectedStateProvider);
+        if (_selectedChange is not null && (_selected is null || !_selected.Changes.Any(change => change.Id == _selectedChange.Id)))
+        {
+            _selectedChange = null;
+        }
+
         try
         {
             _snapshot = _selected?.Provider.GetSnapshot();

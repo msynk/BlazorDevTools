@@ -46,30 +46,53 @@ internal sealed class Timeline : IDevToolsTimeline
 
     public void Complete(long eventId, double durationMs, string? detail = null, DevToolsSeverity? severity = null)
     {
-        if (eventId <= 0)
+        Update(eventId, evt =>
         {
-            return;
-        }
+            evt.DurationMs = durationMs;
+            if (detail is not null)
+            {
+                evt.Detail = detail;
+            }
 
-        var evt = Find(eventId);
-        if (evt is null)
-        {
-            return;
-        }
+            if (severity is not null)
+            {
+                evt.Severity = severity.Value;
+            }
+        });
+    }
 
-        evt.DurationMs = durationMs;
-        if (detail is not null)
+    internal bool Update(long eventId, Action<DevToolsEvent> update, bool cloneData = false)
+    {
+        if (eventId <= 0 || !_events.TryReplaceByKey(static e => e.Id, eventId, current =>
+            {
+                var copy = Clone(current, cloneData);
+                update(copy);
+                return copy;
+            }))
         {
-            evt.Detail = detail;
-        }
-
-        if (severity is not null)
-        {
-            evt.Severity = severity.Value;
+            return false;
         }
 
         _session.Touch();
+        return true;
     }
+
+    private static DevToolsEvent Clone(DevToolsEvent source, bool cloneData) => new()
+    {
+        Id = source.Id,
+        Timestamp = source.Timestamp,
+        StartTicks = source.StartTicks,
+        Kind = source.Kind,
+        Category = source.Category,
+        Title = source.Title,
+        Detail = source.Detail,
+        DurationMs = source.DurationMs,
+        Severity = source.Severity,
+        ParentEventId = source.ParentEventId,
+        ComponentInstanceId = source.ComponentInstanceId,
+        ComponentName = source.ComponentName,
+        Data = cloneData && source.Data is not null ? new Dictionary<string, object?>(source.Data, StringComparer.Ordinal) : source.Data,
+    };
 
     public IDisposable BeginActivity(string category, string title, string? detail = null, DevToolsEventKind kind = DevToolsEventKind.Custom)
     {

@@ -18,6 +18,13 @@ builder.Services.AddBlazorDevToolsServer();   // or AddBlazorDevTools() in WebAs
 
 In an **Interactive Auto** solution, call `AddBlazorDevToolsServer()` in the server project and
 `AddBlazorDevTools()` in the `.Client` project, so DevTools works whichever render mode the page ends up in.
+In a WebAssembly client, pass the host environment explicitly so Development-only activation does not depend on
+server process environment variables:
+
+```csharp
+builder.Services.AddBlazorDevTools(o => o.Enabled = builder.HostEnvironment.IsDevelopment());
+```
+
 In **Blazor WebAssembly**, add `<MetricsSupport>true</MetricsSupport>` to the project if you want render-diff and
 lifecycle timings: the WebAssembly SDK compiles `System.Diagnostics.Metrics` out by default. The About panel says so
 when it is missing, and everything else still works without it.
@@ -115,12 +122,14 @@ Demo/BlazorDevTools.Demo          Blazor Web App (Interactive Auto) with a "Prob
 tests/BlazorDevTools.Tests        xunit + bUnit: instrumentation, tree, rendering, timeline, state, network, interop,
                                   diagnostics, DI graph, concurrency, overhead, memory bounds, scale, panel interaction,
                                   framework-diagnostics attribution, extensibility
+tests/BlazorDevTools.BrowserTests dependency-free Node tests for browser-bridge isolation and pre-.NET redaction
 tests/BlazorDevTools.Benchmarks   reproducible overhead measurement (dotnet run -c Release)
 docs/                             capability matrix, architecture, performance
 ```
 
 Run the demo: `dotnet run --project Demo/BlazorDevTools.Demo`, then open `/problems`.
-Run the tests: `dotnet test`.
+Run the complete test gate (.NET and browser bridge): `npm test`.
+Run either suite alone with `dotnet test` or `npm test --prefix tests/BlazorDevTools.BrowserTests`.
 
 ## Status
 

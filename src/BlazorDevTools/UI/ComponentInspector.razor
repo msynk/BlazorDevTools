@@ -11,7 +11,7 @@
     }
     @if (Record.Parent is { } parent)
     {
-        <span class="bdt-muted">in</span> <a @onclick="() => Host.SelectComponent(parent.InstanceId)">@parent.DisplayName</a>
+        <span class="bdt-muted">in</span> <button type="button" class="bdt-link" @onclick="() => Host.SelectComponent(parent.InstanceId)">@parent.DisplayName</button>
     }
     <span style="margin-left:auto"></span>
     <button type="button" @onclick='() => Host.ShowPanel("timeline", "component:" + Record.InstanceId)'>Events ↗</button>
@@ -122,14 +122,23 @@
                 </tbody>
             </table>
         }
-        <div style="margin:4px 0"><strong>Recent renders</strong> <span class="bdt-muted">(newest first, click to open in timeline)</span></div>
+        <div style="margin:4px 0"><strong>Recent renders</strong> <span class="bdt-muted">@(Session.Options.RecordRenderEvents ? "(newest first, select a time to open in timeline)" : "(newest first; timeline render events are disabled)")</span></div>
         <table>
             <thead><tr><th>Time</th><th class="bdt-num">Duration</th><th>Cause</th><th class="bdt-num">Batch</th></tr></thead>
             <tbody>
                 @foreach (var r in _renders)
                 {
-                    <tr class="bdt-row @(r.Failed ? "bdt-sev-error" : "")" @onclick="() => Host.SelectEvent(r.EventId)">
-                        <td class="bdt-mono">@Fmt.Time(r.At)</td>
+                    <tr class="@(r.Failed ? "bdt-sev-error" : "")">
+                        <td class="bdt-mono">
+                            @if (r.EventId > 0)
+                            {
+                                <button type="button" class="bdt-link bdt-mono" @onclick="() => Host.SelectEvent(r.EventId)">@Fmt.Time(r.At)</button>
+                            }
+                            else
+                            {
+                                @Fmt.Time(r.At)
+                            }
+                        </td>
                         <td class="bdt-num">@Fmt.Ms(r.DurationMs)</td>
                         <td class="bdt-truncate" style="max-width:320px" title="@r.CauseDetail">@r.CauseDetail</td>
                         <td class="bdt-num">#@r.BatchId</td>
@@ -145,7 +154,7 @@
         }
         @foreach (var child in _children)
         {
-            <div><a @onclick="() => Host.SelectComponent(child.InstanceId)" class="bdt-mono">@child.DisplayName</a> <span class="bdt-muted">@child.RenderCount renders · @Fmt.Ms(child.TotalRenderMs)</span></div>
+            <div><button type="button" class="bdt-link bdt-mono" @onclick="() => Host.SelectComponent(child.InstanceId)">@child.DisplayName</button> <span class="bdt-muted">@child.RenderCount renders · @Fmt.Ms(child.TotalRenderMs)</span></div>
         }
     </InspectorSection>
     <InspectorSection Title="@($"Errors ({_errors.Count})")" Collapsed="@(_errors.Count == 0)">
@@ -155,7 +164,7 @@
         }
         @foreach (var e in _errors)
         {
-            <div><a @onclick="() => Host.SelectError(e.Id)">@Fmt.Time(e.At) @e.ExceptionType: @e.Message</a> @(e.Count > 1 ? $"×{e.Count}" : "")</div>
+            <div><button type="button" class="bdt-link" @onclick="() => Host.SelectError(e.Id)">@Fmt.Time(e.At) @e.ExceptionType: @e.Message</button> @(e.Count > 1 ? $"×{e.Count}" : "")</div>
         }
     </InspectorSection>
 </div>

@@ -100,4 +100,22 @@ public class HttpTrackingTests
             Assert.Equal(204, record.StatusCode);
         }
     }
+
+    [Fact]
+    public async Task Track_http_false_leaves_factory_requests_uninstrumented()
+    {
+        var (session, scope) = TestHelpers.CreateSession(
+            options => options.TrackHttp = false,
+            services => services.AddHttpClient("api").ConfigurePrimaryHttpMessageHandler(() =>
+                new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.NoContent))));
+        using (scope)
+        using (session.UseAmbient())
+        {
+            var factory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+            using var client = factory.CreateClient("api");
+            await client.GetAsync("https://example.com/untracked");
+
+            Assert.Empty(session.Http.Snapshot());
+        }
+    }
 }

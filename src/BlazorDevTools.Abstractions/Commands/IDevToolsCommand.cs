@@ -31,5 +31,10 @@ public interface IDevToolsCommandContext
 
     void Notify(string message);
 
+    /// <summary>Persists the current panel preferences when the command changes UI state directly.</summary>
+    void PersistPreferences()
+    {
+    }
+
     IServiceProvider Services { get; }
 }

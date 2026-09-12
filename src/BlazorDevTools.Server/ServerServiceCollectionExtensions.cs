@@ -9,12 +9,19 @@ public static class BlazorDevToolsServerServiceCollectionExtensions
 {
     /// <summary>
     /// Registers Blazor DevTools plus Blazor Server circuit instrumentation (circuit lifecycle, connection state,
-    /// inbound message processing, active circuit overview). Use instead of <c>AddBlazorDevTools</c> in server apps.
+    /// inbound message processing, active circuit overview). Call this in the server project; Interactive Auto apps
+    /// must also call <c>AddBlazorDevTools</c> in the client project so the WebAssembly render path is instrumented.
     /// </summary>
     public static IServiceCollection AddBlazorDevToolsServer(this IServiceCollection services, Action<DevToolsOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton<BlazorDevTools.Server.CircuitRegistry>();
+        if (!services.Any(descriptor => descriptor.ServiceType == typeof(IDevToolsServiceRegistration)
+            && descriptor.ImplementationInstance is ServerServiceRegistration))
+        {
+            services.AddSingleton<IDevToolsServiceRegistration>(ServerServiceRegistration.Instance);
+        }
+
         services.AddBlazorDevTools(options =>
         {
             configure?.Invoke(options);
@@ -24,14 +31,25 @@ public static class BlazorDevToolsServerServiceCollectionExtensions
             }
         });
 
-        // AddBlazorDevTools has already resolved whether DevTools runs (and merges configuration when it was called
-        // before), so the circuit handler is only registered when it will actually do something.
-        var options = services.FirstOrDefault(d => d.ServiceType == typeof(DevToolsOptions))?.ImplementationInstance as DevToolsOptions;
-        if (options is { ResolvedEnabled: true } && !services.Any(d => d.ServiceType == typeof(CircuitHandler) && d.ImplementationType == typeof(BlazorDevTools.Server.DevToolsCircuitHandler)))
-        {
-            services.AddScoped<CircuitHandler, BlazorDevTools.Server.DevToolsCircuitHandler>();
-        }
-
         return services;
+    }
+
+    private sealed class ServerServiceRegistration : IDevToolsServiceRegistration
+    {
+        public static readonly ServerServiceRegistration Instance = new();
+
+        public void Apply(IServiceCollection services, bool enabled)
+        {
+            var existing = services.FirstOrDefault(descriptor => descriptor.ServiceType == typeof(CircuitHandler)
+                && descriptor.ImplementationType == typeof(BlazorDevTools.Server.DevToolsCircuitHandler));
+            if (enabled && existing is null)
+            {
+                services.AddScoped<CircuitHandler, BlazorDevTools.Server.DevToolsCircuitHandler>();
+            }
+            else if (!enabled && existing is not null)
+            {
+                services.Remove(existing);
+            }
+        }
     }
 }

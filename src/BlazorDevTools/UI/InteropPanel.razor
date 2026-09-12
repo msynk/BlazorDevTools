@@ -2,7 +2,11 @@
 
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:50%">
-        <div class="bdt-toolbar"><strong>By identifier</strong> <span class="bdt-muted">(→ .NET→JS, ← JS→.NET)</span> <button type="button" style="margin-left:auto" @onclick="() => Session.Interop.Clear()">Clear</button></div>
+        <div class="bdt-toolbar">
+            <input type="text" aria-label="Filter JS interop calls" placeholder="Filter identifier, component, result or error" value="@Query" @oninput="OnQuery" />
+            <span class="bdt-muted bdt-nowrap">@_calls.Count calls · → .NET→JS, ← JS→.NET</span>
+            <button type="button" @onclick="() => Session.Interop.Clear()">Clear</button>
+        </div>
         <div class="bdt-scroll">
             @if (_aggregates.Length == 0)
             {
@@ -35,11 +39,11 @@
             <table>
                 <thead><tr><th>Time</th><th>Call</th><th>Component</th><th class="bdt-num">Duration</th><th>Result</th></tr></thead>
                 <tbody>
-                    <Virtualize Items="_calls" ItemSize="23" Context="c">
+                    <Virtualize Items="_calls" ItemSize="23" Context="c" SpacerElement="tr">
                         <tr class="bdt-row @(c.Succeeded ? "" : "bdt-sev-error")" @onclick="() => Host.SelectEvent(c.TimelineEventId)">
                             <td class="bdt-mono">@Fmt.Time(c.At)</td>
                             <td class="bdt-mono bdt-truncate" style="max-width:240px" title="args: @(c.ArgumentTypes ?? "none")">@(c.Direction == JsInteropDirection.DotNetToJs ? "→" : "←") @c.Identifier (@c.ArgumentCount)</td>
-                            <td>@if (c.ComponentInstanceId is { } id) { <a @onclick:stopPropagation="true" @onclick="() => Host.SelectComponent(id)">@c.ComponentName</a> } else { <span class="bdt-muted">–</span> }</td>
+                            <td>@if (c.ComponentInstanceId is { } id) { <button type="button" class="bdt-link" @onclick:stopPropagation="true" @onclick="() => Host.SelectComponent(id)">@c.ComponentName</button> } else { <span class="bdt-muted">–</span> }</td>
                             <td class="bdt-num">@(c.DurationMs is null ? "…" : Fmt.Ms(c.DurationMs))</td>
                             <td class="bdt-truncate @(c.Succeeded ? "bdt-muted" : "bdt-err")" style="max-width:200px" title="@c.Error">@(c.Succeeded ? (c.ResultType ?? "") : c.Error)</td>
                         </tr>
@@ -55,12 +59,30 @@
 
     private DevToolsSession Session => Host.Session;
 
+    private DevToolsUiState Ui => Host.Ui;
+
+    private string? Query => Ui.GetQuery("interop");
+
     private JsInteropAggregate[] _aggregates = [];
     private List<JsInteropRecord> _calls = [];
 
     protected override void OnParametersSet()
     {
-        _aggregates = Session.Interop.Aggregates().OrderByDescending(a => a.TotalMs).ToArray();
-        _calls = Session.Interop.Snapshot().Reverse().ToList();
+        var filter = QueryFilter.Parse(Query);
+        foreach (var token in filter.Tokens)
+        {
+            filter.Terms.Add(token.Key + ":" + token.Value);
+        }
+
+        _calls = Session.Interop.Snapshot().Reverse()
+            .Where(c => filter.MatchesText(c.Identifier, c.ComponentName, c.ResultType, c.Error, c.Direction.ToString()))
+            .ToList();
+        var matchingCalls = _calls.Select(c => (c.Identifier, c.Direction)).ToHashSet();
+        _aggregates = Session.Interop.Aggregates()
+            .Where(a => filter.MatchesText(a.Identifier, a.Direction.ToString()) || matchingCalls.Contains((a.Identifier, a.Direction)))
+            .OrderByDescending(a => a.TotalMs)
+            .ToArray();
     }
+
+    private void OnQuery(ChangeEventArgs e) => Ui.SetQuery("interop", e.Value?.ToString());
 }

@@ -9,6 +9,7 @@ let jsToDotNetBatch = [];
 let flushTimer = null;
 let originalInvokeAsync = null;
 let originalInvoke = null;
+let bridgeGeneration = 0;
 const listeners = [];
 
 function on(target, type, handler, options) {
@@ -53,7 +54,14 @@ function scheduleFlush() {
 }
 
 function isDevToolsCall(assemblyOrRef, method) {
-    return assemblyOrRef === "BlazorDevTools" || (typeof method === "string" && method.startsWith("BlazorDevTools."));
+    return assemblyOrRef === dotnetRef || assemblyOrRef === "BlazorDevTools"
+        || (typeof method === "string" && method.startsWith("BlazorDevTools."));
+}
+
+function queueJsToDotNet(entry, generation) {
+    if (generation !== bridgeGeneration || !dotnetRef) return;
+    jsToDotNetBatch.push(entry);
+    scheduleFlush();
 }
 
 function wrapDotNet() {
@@ -68,6 +76,7 @@ function wrapDotNet() {
             return originalInvokeAsync.apply(this, [assemblyName, methodIdentifier, ...args]);
         }
         const start = performance.now();
+        const generation = bridgeGeneration;
         const entry = { identifier: target + "." + methodIdentifier, args: args.length, sync: false, at: Date.now() };
         let promise;
         try {
@@ -75,38 +84,37 @@ function wrapDotNet() {
         } catch (err) {
             entry.durationMs = performance.now() - start;
             entry.error = String(err && err.message ? err.message : err);
-            jsToDotNetBatch.push(entry);
-            scheduleFlush();
+            queueJsToDotNet(entry, generation);
             throw err;
         }
         return promise.then(r => {
             entry.durationMs = performance.now() - start;
-            jsToDotNetBatch.push(entry);
-            scheduleFlush();
+            queueJsToDotNet(entry, generation);
             return r;
         }, err => {
             entry.durationMs = performance.now() - start;
             entry.error = String(err && err.message ? err.message : err);
-            jsToDotNetBatch.push(entry);
-            scheduleFlush();
+            queueJsToDotNet(entry, generation);
             throw err;
         });
     };
     if (originalInvoke) {
         DotNet.invokeMethod = function (assemblyName, methodIdentifier, ...args) {
+            if (isDevToolsCall(assemblyName, methodIdentifier)) {
+                return originalInvoke.apply(this, [assemblyName, methodIdentifier, ...args]);
+            }
             const start = performance.now();
+            const generation = bridgeGeneration;
             const entry = { identifier: assemblyName + "." + methodIdentifier, args: args.length, sync: true, at: Date.now() };
             try {
                 const r = originalInvoke.apply(this, [assemblyName, methodIdentifier, ...args]);
                 entry.durationMs = performance.now() - start;
-                jsToDotNetBatch.push(entry);
-                scheduleFlush();
+                queueJsToDotNet(entry, generation);
                 return r;
             } catch (err) {
                 entry.durationMs = performance.now() - start;
                 entry.error = String(err && err.message ? err.message : err);
-                jsToDotNetBatch.push(entry);
-                scheduleFlush();
+                queueJsToDotNet(entry, generation);
                 throw err;
             }
         };
@@ -182,9 +190,12 @@ export function attach(ref, options) {
 }
 
 export function detach() {
+    bridgeGeneration++;
     while (listeners.length) listeners.pop()();
     unwrapDotNet();
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    // Never retain calls across panel/circuit lifetimes: a later attach belongs to a different DevTools session.
+    jsToDotNetBatch = [];
     dotnetRef = null;
 }
 
@@ -197,8 +208,10 @@ const REDACTED = "«redacted»";
 // A JSON Web Token is a credential whatever key it is stored under, and "user"/"profile"/"session" are far more
 // common key names for one than "token" is.
 function looksLikeSecret(value) {
-    if (/^ey[A-Za-z0-9_-]{6,}.[A-Za-z0-9_-]{6,}./.test(value)) return true;
-    return /("(access|id|refresh|bearer)_?token"|"authorization")s*:/i.test(value);
+    if (/ey[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\./.test(value)) return true;
+    if (/^Bearer\s+\S+/i.test(value)) return true;
+    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(value)) return true;
+    return /(?:password|passwd|pwd|api[_-]?key|access[_-]?token|id[_-]?token|refresh[_-]?token|authorization|client[_-]?secret|connectionstring|token|secret|credential|cookie|private[_ -]?key)"?\s*[:=]/i.test(value);
 }
 
 export function getStorage(kind, sensitivePatterns) {

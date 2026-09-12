@@ -105,6 +105,8 @@
 .bdt-root tr.bdt-selected, .bdt-root .bdt-selected { background: var(--bdt-accent-bg) !important; }
 .bdt-root a { color: var(--bdt-accent); text-decoration: none; cursor: pointer; }
 .bdt-root a:hover { text-decoration: underline; }
+.bdt-root .bdt-link { display: inline; padding: 0; border: 0; color: var(--bdt-accent); background: none; font: inherit; text-align: inherit; cursor: pointer; }
+.bdt-root .bdt-link:hover { text-decoration: underline; }
 .bdt-num { text-align: right; font-family: var(--bdt-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bdt-muted { color: var(--bdt-fg2); }
 .bdt-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -151,7 +153,8 @@
 .bdt-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .bdt-empty { padding: 16px; color: var(--bdt-fg2); }
 .bdt-section { border-bottom: 1px solid var(--bdt-border); }
-.bdt-section-title { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--bdt-bg2); font-weight: 600; cursor: pointer; user-select: none; }
+.bdt-section-title, .bdt-root button.bdt-section-title { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: 0; color: inherit; background: var(--bdt-bg2); font: inherit; font-weight: 600; text-align: left; user-select: none; }
+.bdt-root button.bdt-section-title { cursor: pointer; }
 .bdt-section-title .bdt-caret { width: 10px; display: inline-block; color: var(--bdt-fg2); }
 .bdt-section-body { padding: 4px 8px 6px; }
 .bdt-kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }

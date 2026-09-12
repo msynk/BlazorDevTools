@@ -321,13 +321,6 @@ internal static class ActivityObserver
             return;
         }
 
-        // Tags only exist now; back-fill the component type and the structured data bag recorded at start.
-        var componentType = ReadTags(activity, evt.Data as Dictionary<string, object?> ?? []).ComponentType;
-        if (componentType is not null)
-        {
-            evt.ComponentName = Shorten(componentType);
-        }
-
         var duration = activity.Duration.TotalMilliseconds;
         var failed = activity.Status == ActivityStatusCode.Error;
         string? errorType = null;
@@ -341,9 +334,28 @@ internal static class ActivityObserver
 
         var detail = failed ? "failed" + (errorType is null ? "" : " with " + errorType) : "completed";
         var severity = failed ? DevToolsSeverity.Error : duration >= session.Options.Diagnostics.SlowEventHandlerMs ? DevToolsSeverity.Warning : DevToolsSeverity.Info;
-        session.Timeline.Complete(evt.Id, duration, detail, severity);
+        var stoppedTags = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var componentType = ReadTags(activity, stoppedTags).ComponentType;
+        var shortComponentType = componentType is null ? null : Shorten(componentType);
+        session.Timeline.Update(evt.Id, current =>
+        {
+            // Tags only exist now; back-fill the component type and structured data as one atomic timeline update.
+            if (current.Data is Dictionary<string, object?> data)
+            {
+                foreach (var tag in stoppedTags)
+                {
+                    data[tag.Key] = tag.Value;
+                }
+            }
 
-        if (evt.Kind == DevToolsEventKind.UiEvent && evt.ComponentName is { } typeName)
+            current.ComponentName = shortComponentType ?? current.ComponentName;
+            current.DurationMs = duration;
+            current.Detail = detail;
+            current.Severity = severity;
+        }, cloneData: true);
+
+        var typeName = shortComponentType ?? evt.ComponentName;
+        if (evt.Kind == DevToolsEventKind.UiEvent && typeName is not null)
         {
             var metrics = session.TypeMetrics.GetOrAdd(typeName, static name => new LifecycleTypeMetrics { TypeName = name });
             lock (metrics)

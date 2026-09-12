@@ -203,6 +203,7 @@ public sealed class DevToolsSession : IDisposable
         Errors.Clear();
         Http.Clear();
         Interop.Clear();
+        State.ClearHistory();
         Components.ClearDisposed();
         Diagnostics.Clear();
         TypeMetrics.Clear();

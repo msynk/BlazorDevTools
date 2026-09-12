@@ -34,8 +34,10 @@ public class TimelineTests
         using (scope)
         {
             var id = session.Timeline.Record(new DevToolsEvent { Kind = DevToolsEventKind.Http, Category = "http", Title = "GET /x" });
+            var beforeCompletion = session.Timeline.Find(id)!;
             session.Timeline.Complete(id, 12.5, "200 OK", DevToolsSeverity.Warning);
             var evt = session.Timeline.Find(id)!;
+            Assert.Null(beforeCompletion.DurationMs);
             Assert.Equal(12.5, evt.DurationMs);
             Assert.Equal("200 OK", evt.Detail);
             Assert.Equal(DevToolsSeverity.Warning, evt.Severity);

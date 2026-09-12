@@ -17,7 +17,7 @@
                 <table>
                     <thead><tr><th>Time</th><th>Method</th><th>URL</th><th class="bdt-num">Status</th><th class="bdt-num">Duration</th><th class="bdt-num">Size</th><th>Trigger</th></tr></thead>
                     <tbody>
-                        <Virtualize Items="_rows" ItemSize="23" Context="r">
+                        <Virtualize Items="_rows" ItemSize="23" Context="r" SpacerElement="tr">
                             <tr class="bdt-row @(Ui.SelectedHttpId == r.Id ? "bdt-selected" : "") @(r.IsFailed ? "bdt-sev-error" : "")" @onclick="() => { Ui.SelectedHttpId = r.Id; Ui.Touch(); }">
                                 <td class="bdt-mono">@Fmt.Time(r.StartedAt)</td>
                                 <td class="bdt-mono">@r.Method</td>
@@ -46,8 +46,8 @@
                         <dt>Duration</dt><dd>@Fmt.Ms(s.DurationMs)</dd>
                         <dt>Request size</dt><dd>@Fmt.Bytes(s.RequestBytes)</dd>
                         <dt>Response size</dt><dd>@Fmt.Bytes(s.ResponseBytes) @(s.ContentType is null ? "" : "· " + s.ContentType)</dd>
-                        <dt>Trigger</dt><dd>@if (s.TriggerEventId is { } t) { <a @onclick="() => Host.SelectEvent(t)">@s.TriggerDescription ↗</a> } else { <span class="bdt-muted">not inside a UI event (lifecycle method, timer or background work)</span> }</dd>
-                        <dt>Timeline</dt><dd><a @onclick="() => Host.SelectEvent(s.TimelineEventId)">open event ↗</a></dd>
+                        <dt>Trigger</dt><dd>@if (s.TriggerEventId is { } t) { <button type="button" class="bdt-link" @onclick="() => Host.SelectEvent(t)">@s.TriggerDescription ↗</button> } else { <span class="bdt-muted">not inside a UI event (lifecycle method, timer or background work)</span> }</dd>
+                        <dt>Timeline</dt><dd><button type="button" class="bdt-link" @onclick="() => Host.SelectEvent(s.TimelineEventId)">open event ↗</button></dd>
                     </dl>
                     <div class="bdt-muted" style="margin-top:4px">Bodies are never captured. Sensitive headers and query values are redacted.</div>
                 </div>

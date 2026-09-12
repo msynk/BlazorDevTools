@@ -31,28 +31,36 @@ internal static class BuiltInCommands
             ctx.Services.GetRequiredService<DevToolsSession>().Timeline.Clear();
             ctx.Notify("Timeline cleared");
         }),
-        new DelegateCommand("all.clear", "Clear all captured data", "DevTools", (ctx, _) =>
+        new DelegateCommand("all.clear", "Clear captured event histories", "DevTools", (ctx, _) =>
         {
             ctx.Services.GetRequiredService<DevToolsSession>().ClearAll();
-            ctx.Notify("All captured data cleared");
+            ctx.Notify("Captured event histories cleared");
         }, keywords: ["reset"]),
         new DelegateCommand("ui.theme", "Toggle theme", "DevTools", (ctx, _) =>
         {
             var ui = ctx.Services.GetRequiredService<DevToolsSession>().Ui;
-            ui.Theme = ui.Theme == DevToolsTheme.Dark ? DevToolsTheme.Light : DevToolsTheme.Dark;
+            ui.Theme = ui.Theme switch
+            {
+                DevToolsTheme.Auto => DevToolsTheme.Dark,
+                DevToolsTheme.Dark => DevToolsTheme.Light,
+                _ => DevToolsTheme.Auto,
+            };
             ui.Touch();
-        }, keywords: ["dark", "light"]),
+            ctx.PersistPreferences();
+        }, keywords: ["auto", "dark", "light"]),
         new DelegateCommand("ui.dock", "Toggle dock position", "DevTools", (ctx, _) =>
         {
             var ui = ctx.Services.GetRequiredService<DevToolsSession>().Ui;
             ui.Dock = ui.Dock == DevToolsDock.Bottom ? DevToolsDock.Right : DevToolsDock.Bottom;
             ui.Touch();
+            ctx.PersistPreferences();
         }, keywords: ["bottom", "right", "side"]),
         new DelegateCommand("ui.close", "Close DevTools", "DevTools", (ctx, _) =>
         {
             var ui = ctx.Services.GetRequiredService<DevToolsSession>().Ui;
             ui.IsOpen = false;
             ui.Touch();
+            ctx.PersistPreferences();
         }, keywords: ["hide"]),
     ];
 
