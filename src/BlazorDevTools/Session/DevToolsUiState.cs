@@ -36,6 +36,9 @@ public sealed class DevToolsUiState
 
     public bool ShowHiddenComponents { get; set; }
 
+    /// <summary>When true, the open tab re-reads captured data on the refresh cadence. Off means Refresh is required.</summary>
+    public bool LiveUpdates { get; set; } = true;
+
     public string? Notification { get; set; }
 
     public DateTimeOffset NotificationAt { get; set; }

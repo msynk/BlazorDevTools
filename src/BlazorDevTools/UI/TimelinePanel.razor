@@ -1,11 +1,12 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:58%">
         <div class="bdt-toolbar">
             <input type="text" placeholder='Filter: text, kind:render, component:12, severity:error, id:45' value="@Query" @oninput="OnQuery" />
             <button type="button" @onclick="() => Session.Timeline.Clear()" title="Clear timeline">Clear</button>
-            <label><input type="checkbox" checked="@_showLanes" @onchange='e => _showLanes = e.Value is true' /> lanes</label>
+            <label><input type="checkbox" checked="@_showLanes" @onchange='e => { _showLanes = e.Value is true; OnParametersSet(); }' /> lanes</label>
             <span class="bdt-muted bdt-nowrap">@_events.Count / @_all.Length</span>
         </div>
         <div class="bdt-chips" style="padding:3px 6px; border-bottom:1px solid var(--bdt-border)">
@@ -144,12 +145,6 @@
 
     private const double WindowSeconds = 10;
 
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsSession Session => Host.Session;
-
-    private DevToolsUiState Ui => Host.Ui;
-
     private string? Query => Ui.GetQuery("timeline");
 
     private DevToolsEvent[] _all = [];
@@ -274,7 +269,11 @@
         _bars = bars;
     }
 
-    private void OnQuery(ChangeEventArgs e) => Ui.SetQuery("timeline", e.Value?.ToString());
+    private void OnQuery(ChangeEventArgs e)
+    {
+        Ui.SetQuery("timeline", e.Value?.ToString());
+        OnParametersSet();
+    }
 
     private void ToggleKind(DevToolsEventKind kind)
     {

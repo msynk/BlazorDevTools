@@ -22,7 +22,7 @@ BlazorDevTools.Server              circuit instrumentation (reference extension)
 
 | Piece | Mechanism | Notes |
 |---|---|---|
-| `DevToolsComponentActivator` | Public `IComponentActivator` registered in DI (scoped). Wraps a previously registered activator (custom ones, bUnit) as inner. | Registers a `ComponentRecord` and instruments the instance. Types under `[DevToolsIgnore]` or matching ignore predicates are skipped. |
+| `DevToolsComponentActivator` | Public `IComponentActivator` registered in DI (scoped). Wraps a previously registered activator (custom ones, bUnit) as inner. | Registers a `ComponentRecord` and instruments the instance. Types under `[DevToolsIgnore]` or matching ignore predicates are skipped. DevTools' own components are recognised by assembly and by extension panel descriptor; see *Never observing itself*. |
 | `RenderTracker` | Replaces `ComponentBase._renderFragment` with a measuring wrapper (`FieldInfo.SetValue` on the readonly field). | Measures `BuildRenderTree`, detects batch boundaries through `RenderBatchBuilder.UpdatedComponentDiffs.Count`, attributes causes, captures optional field diffs, and patches `[Inject] IJSRuntime` on the first render (the earliest point after the framework injects it). Batch diff measurements that arrive late — on Blazor Server the framework records them when the browser acknowledges the render — are matched back to the batch that produced them through a queue of batches still awaiting one. |
 | `BlazorReflection` | Expression-compiled accessors created once; each is null when the member is missing. | The capability report reflects which accessors work. |
 | `ActivityObserver` | Static `ActivityListener` on `Microsoft.AspNetCore.Components` and `MeterListener` on the two components meters. `AddBlazorDevTools` also registers the framework's own `ComponentsActivitySource`/`ComponentsMetrics` (public `AddComponentsTracing`/`AddComponentsMetrics`), which only server-side rendering registers on its own. | Events are attached to activities via `Activity.SetCustomProperty`; sessions are resolved with `SessionResolver`. The framework tags its activities on *stop*, so the component type is read from the display name while the handler is still running and corrected from the tags afterwards. Interactions with the DevTools UI itself are recognised and never recorded. |
@@ -45,6 +45,25 @@ A render sample's cause is decided in this order, and the label says which rule 
    call. DevTools does not walk the stack to name the caller; the timeline's *Just before* section shows the surrounding
    activity instead.
 
+### Never observing itself
+
+A tool that reports its own activity is worse than one that reports nothing: it buries the developer's data under the
+clicks they made to look for it, and every refresh tick adds more. So DevTools' own UI is excluded from every panel —
+tree, profiler, timeline, JS interop, diagnostics — and its cost is reported as overhead in the About panel instead.
+
+Ownership is decided in two steps, because one is not enough:
+
+* **By type, at activation**: the DevTools assembly, the `BlazorDevTools.Server.UI` namespace, and the component type
+  of any panel an extension contributed (which lives in the extension's own assembly).
+* **By position, once the hierarchy resolves**: a record whose parent is DevTools-owned becomes DevTools-owned.
+  The panels render `Virtualize`, `CascadingValue` and `DynamicComponent`, which an application renders too, so their
+  type says nothing about whose they are — only the tree does. The parent is unknown at activation (the instance is not
+  attached to the renderer yet), and known by the first render, which is early enough: `RenderTracker` resolves the
+  renderer and hierarchy before it decides to sample a render or to wrap the component's `IJSRuntime`.
+
+Browser-side, `devtools.js` recognises its own `DotNetObjectReference` and skips it when wrapping `DotNet.invokeMethod*`,
+and `ActivityObserver` marks `HandleEvent` activities raised by DevTools components as ignored.
+
 ### Session stores (`BlazorDevTools.Session`)
 
 `DevToolsSession` (scoped) owns: `Timeline` (ring buffer of `DevToolsEvent`, monotonic ids, O(log n) lookup by id),
@@ -53,7 +72,9 @@ A render sample's cause is decided in this order, and the label says which rule 
 diffs, history), `DiagnosticsEngine`, `CommandRegistry`, `DevToolsUiState`, `OverheadMeter`, `BrowserState`.
 Every mutation bumps `Session.Version`; the UI polls the version on a timer (250 ms open, 1 s closed) and re-renders
 only on change, so idle DevTools costs a comparison per tick. Opening the panel forces a refresh immediately rather
-than waiting for the next tick.
+than waiting for the next tick. Built-in tabs snapshot in `OnParametersSet` and have no other parameters, so the
+host cascades a revision counter; without it Blazor skips `SetParametersAsync` and the open tab stays stale until
+remounted. Live updates can be turned off in the header; Refresh always re-reads.
 
 Components are held **weakly**: DevTools must never keep an application component — and through it a subtree, its
 services and its renderer — alive. Records are swept on component churn (at most once a second) rather than only when

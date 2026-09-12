@@ -1,4 +1,5 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:50%">
@@ -86,12 +87,6 @@
 </div>
 
 @code {
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsSession Session => Host.Session;
-
-    private DevToolsUiState Ui => Host.Ui;
-
     private string? Query => Ui.GetQuery("errors");
 
     private List<ErrorRecord> _rows = [];
@@ -114,7 +109,11 @@
         }
     }
 
-    private void OnQuery(ChangeEventArgs e) => Ui.SetQuery("errors", e.Value?.ToString());
+    private void OnQuery(ChangeEventArgs e)
+    {
+        Ui.SetQuery("errors", e.Value?.ToString());
+        OnParametersSet();
+    }
 
     private async Task Copy(ErrorRecord e)
     {

@@ -138,6 +138,8 @@
 .bdt-tab .bdt-count.bdt-err { background: var(--bdt-err-bg); color: var(--bdt-err); }
 .bdt-tab .bdt-count.bdt-warn { background: var(--bdt-warn-bg); color: var(--bdt-warn); }
 .bdt-tools { display: flex; gap: 2px; align-items: center; margin-left: auto; }
+.bdt-tools label { display: flex; align-items: center; gap: 4px; padding: 2px 6px; white-space: nowrap; cursor: pointer; }
+.bdt-tools label.bdt-off { opacity: .6; }
 .bdt-search { width: 260px; }
 .bdt-body { flex: 1 1 auto; min-height: 0; display: flex; overflow: hidden; }
 .bdt-notification { position: absolute; left: 50%; transform: translateX(-50%); bottom: 8px; background: var(--bdt-fg); color: var(--bdt-bg); padding: 4px 10px; border-radius: 4px; z-index: 5; }

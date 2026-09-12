@@ -93,8 +93,18 @@ public sealed class ComponentRecord
 
     internal string ReRenderTitle { get; }
 
-    /// <summary>True for components that belong to DevTools itself; their cost is counted as overhead, not app activity.</summary>
-    public bool IsDevTools { get; }
+    /// <summary>
+    /// True for components that belong to DevTools itself; their cost is counted as overhead, not app activity.
+    /// <para>
+    /// Set from the type at activation and again from the parent once the hierarchy resolves: the panels render
+    /// framework components (<c>Virtualize</c>, <c>CascadingValue</c>, <c>DynamicComponent</c>) that an application
+    /// renders too, so the type alone cannot tell whose they are — only the position in the tree can.
+    /// </para>
+    /// </summary>
+    public bool IsDevTools { get; private set; }
+
+    /// <summary>Marks this record — and therefore its own descendants, which resolve their parent later — as DevTools' own.</summary>
+    internal void MarkDevToolsOwned() => IsDevTools = true;
 
     /// <summary>Hidden from the tree (framework/library internals) but still tracked so parent chains stay intact.</summary>
     public bool IsHidden { get; }

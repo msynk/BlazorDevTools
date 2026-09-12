@@ -1,11 +1,12 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 @using BlazorDevTools.Instrumentation
 
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:62%">
         <div class="bdt-toolbar">
             <input type="text" placeholder='Filter: name, "renders>20", "sort:max|total|renders|avg|last"' value="@Query" @oninput="OnQuery" />
-            <label><input type="checkbox" checked="@_includeDisposed" @onchange='e => { _includeDisposed = e.Value is true; }' /> disposed</label>
+            <label><input type="checkbox" checked="@_includeDisposed" @onchange='e => { _includeDisposed = e.Value is true; OnParametersSet(); }' /> disposed</label>
             <span class="bdt-muted bdt-nowrap">@_rows.Count components · @Session.RenderTracker.BatchCount batches</span>
         </div>
         <div class="bdt-scroll">
@@ -92,12 +93,6 @@
 @code {
     private sealed record Row(long InstanceId, string DisplayName, string TypeName, int RenderCount, double TotalRenderMs, double AverageRenderMs, double MaxRenderMs, double LastRenderMs, string? LastCause, bool IsDisposed);
 
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsSession Session => Host.Session;
-
-    private DevToolsUiState Ui => Host.Ui;
-
     private string? Query => Ui.GetQuery("profiler");
 
     private List<Row> _rows = [];
@@ -148,7 +143,11 @@
         _typeMetrics = Session.TypeMetrics.Values.OrderByDescending(m => m.ParameterUpdateMs + m.EventHandlerMs).Take(30).ToArray();
     }
 
-    private void OnQuery(ChangeEventArgs e) => Ui.SetQuery("profiler", e.Value?.ToString());
+    private void OnQuery(ChangeEventArgs e)
+    {
+        Ui.SetQuery("profiler", e.Value?.ToString());
+        OnParametersSet();
+    }
 
     private void Sort(string key)
     {
@@ -158,5 +157,7 @@
         {
             Ui.SetQuery("profiler", string.Join(' ', (Query ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(p => !p.StartsWith("sort:", StringComparison.OrdinalIgnoreCase))));
         }
+
+        OnParametersSet();
     }
 }

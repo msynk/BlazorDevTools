@@ -1,4 +1,5 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:64%">
@@ -6,7 +7,7 @@
             <strong>Findings</strong>
             <span class="bdt-muted">@_active.Count active · @_dismissed dismissed</span>
             <span style="margin-left:auto"></span>
-            <label><input type="checkbox" checked="@_showDismissed" @onchange='e => _showDismissed = e.Value is true' /> show dismissed</label>
+            <label><input type="checkbox" checked="@_showDismissed" @onchange='e => { _showDismissed = e.Value is true; OnParametersSet(); }' /> show dismissed</label>
             <button type="button" @onclick="() => Session.Diagnostics.Evaluate(force: true)">Re-run</button>
             <button type="button" @onclick="() => Session.Diagnostics.Clear()">Clear</button>
         </div>
@@ -91,10 +92,6 @@
 </div>
 
 @code {
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsSession Session => Host.Session;
-
     private List<DiagnosticRecord> _active = [];
     private int _dismissed;
     private bool _showDismissed;

@@ -115,8 +115,13 @@ internal sealed class DevToolsComponentActivator : IComponentActivator
         }
 
         var ns = type.Namespace ?? string.Empty;
-        // DevTools' own UI: the core assembly, or panel components shipped by the DevTools extension packages.
-        var isDevTools = type.Assembly == DevToolsAssembly || ns.StartsWith("BlazorDevTools.Server.UI", StringComparison.Ordinal);
+        // DevTools' own UI: the core assembly, panel components shipped by the DevTools extension packages, or a panel
+        // an extension contributed from its own assembly. Framework components the panels render (Virtualize,
+        // CascadingValue, DynamicComponent) are indistinguishable from the application's by type; they inherit
+        // ownership from their parent once the hierarchy resolves.
+        var isDevTools = type.Assembly == DevToolsAssembly
+            || ns.StartsWith("BlazorDevTools.Server.UI", StringComparison.Ordinal)
+            || IsExtensionPanel(type);
         var hidden = false;
         foreach (var prefix in _options.HiddenComponentNamespaces)
         {
@@ -140,5 +145,18 @@ internal sealed class DevToolsComponentActivator : IComponentActivator
         }
 
         return (false, hidden, isDevTools);
+    }
+
+    private bool IsExtensionPanel(Type type)
+    {
+        foreach (var panel in _session.Registry.Panels)
+        {
+            if (panel.ComponentType == type)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

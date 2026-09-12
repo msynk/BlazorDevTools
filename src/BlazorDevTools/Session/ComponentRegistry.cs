@@ -53,8 +53,8 @@ internal sealed class ComponentRegistry
     /// <summary>Records currently kept, including recently disposed ones still shown in the UI.</summary>
     public int TrackedCount => _byId.Count;
 
-    /// <summary>Components that are still attached to a renderer.</summary>
-    public int LiveCount => _byId.Values.Count(r => !r.IsDisposed);
+    /// <summary>Application components that are still attached to a renderer. DevTools' own UI is not one of them.</summary>
+    public int LiveCount => _byId.Values.Count(r => !r.IsDisposed && !r.IsDevTools);
 
     /// <summary>True when <see cref="DevToolsOptions.MaxTrackedComponents"/> was hit and new components are no longer tracked.</summary>
     public bool IsTruncated { get; private set; }
@@ -200,6 +200,13 @@ internal sealed class ComponentRegistry
             }
             // A renderer can expose the child before its parent has been registered by our activator.
             // Leave the link unresolved so a later refresh can repair the tree.
+        }
+
+        // Anything the DevTools UI renders belongs to DevTools, including the framework components it uses. This is
+        // the earliest point the owner is known: at activation the instance is not attached to the renderer yet.
+        if (!record.IsDevTools && record.Parent?.IsDevTools == true)
+        {
+            record.MarkDevToolsOwned();
         }
     }
 

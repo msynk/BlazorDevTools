@@ -1,11 +1,12 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 @using Microsoft.Extensions.DependencyInjection
 
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:50%">
         <div class="bdt-toolbar">
             <input type="text" placeholder="Filter: type name, lifetime:scoped|singleton|transient" value="@Query" @oninput="OnQuery" />
-            <label><input type="checkbox" checked="@_showFramework" @onchange='e => _showFramework = e.Value is true' /> framework</label>
+            <label><input type="checkbox" checked="@_showFramework" @onchange='e => { _showFramework = e.Value is true; OnParametersSet(); }' /> framework</label>
             <span class="bdt-muted bdt-nowrap">@_rows.Count / @(Host.Graph?.Count ?? 0)</span>
         </div>
         <div class="bdt-scroll">
@@ -19,7 +20,7 @@
                     <thead><tr><th>Service</th><th>Lifetime</th><th>Implementation</th><th class="bdt-num">Deps</th><th class="bdt-num">Used by</th></tr></thead>
                     <tbody>
                         <Virtualize Items="_rows" ItemSize="23" Context="s" SpacerElement="tr">
-                            <tr class="bdt-row @(_selected == s ? "bdt-selected" : "")" @onclick="() => { _selected = s; }">
+                            <tr class="bdt-row @(_selected == s ? "bdt-selected" : "")" @onclick="() => { _selected = s; OnParametersSet(); }">
                                 <td class="bdt-mono bdt-truncate" style="max-width:260px" title="@s.ServiceType.FullName">@s.ServiceTypeName @(s.IsKeyed ? "🔑" : "") @(s.IsShadowed ? "(overridden)" : "")</td>
                                 <td><span class="bdt-chip bdt-@Fmt.Lifetime(s.Lifetime)">@Fmt.Lifetime(s.Lifetime)</span></td>
                                 <td class="bdt-mono bdt-truncate bdt-muted" style="max-width:220px">@s.ImplementationName</td>
@@ -100,10 +101,6 @@
 </div>
 
 @code {
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsUiState Ui => Host.Ui;
-
     private string? Query => Ui.GetQuery("services");
 
     private List<ServiceInfo> _rows = [];
@@ -146,6 +143,7 @@
     {
         Ui.SetQuery("services", e.Value?.ToString());
         _selected = null;
+        OnParametersSet();
     }
 
     private RenderFragment DependencyTree(ServiceInfo service, int depth, HashSet<int> visited) => __builder =>
@@ -160,7 +158,7 @@
             var d = dep;
             var captive = service.Lifetime == ServiceLifetime.Singleton && d.Lifetime != ServiceLifetime.Singleton;
             <div style="padding-left:@(depth * 14)px">
-                <button type="button" class="bdt-link bdt-mono" @onclick="() => _selected = d">@d.ServiceTypeName</button>
+                <button type="button" class="bdt-link bdt-mono" @onclick="() => { _selected = d; OnParametersSet(); }">@d.ServiceTypeName</button>
                 <span class="bdt-chip bdt-@Fmt.Lifetime(d.Lifetime)">@Fmt.Lifetime(d.Lifetime)</span>
                 @if (captive) { <span class="bdt-chip bdt-err">captive</span> }
             </div>

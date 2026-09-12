@@ -1,4 +1,5 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:30%">
@@ -95,12 +96,6 @@
 </div>
 
 @code {
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsSession Session => Host.Session;
-
-    private DevToolsUiState Ui => Host.Ui;
-
     private StateProviderEntry[] _entries = [];
     private StateProviderEntry? _selected;
     private object? _snapshot;

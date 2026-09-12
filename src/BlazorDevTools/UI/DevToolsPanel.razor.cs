@@ -23,6 +23,7 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
     private DotNetObjectReference<JsBridge>? _bridgeRef;
     private long _lastVersion = -1;
     private long _lastUiVersion = -1;
+    private long _viewRevision;
     private bool _interactive;
     private string _searchText = "";
     private Task? _loop;
@@ -116,21 +117,17 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
             while (!token.IsCancellationRequested)
             {
                 await Task.Delay(Ui.IsOpen ? Math.Max(50, Options.Ui.RefreshIntervalMs) : 1000, token);
-                if (Session.Version != _lastVersion || Ui.Version != _lastUiVersion)
+                try
                 {
-                    await InvokeAsync(() =>
-                    {
-                        Session.RenderTracker.CloseBatch();
-                        if (Ui.IsOpen)
-                        {
-                            Session.Components.Refresh();
-                            Session.Diagnostics.Evaluate();
-                        }
-
-                        _lastVersion = Session.Version;
-                        _lastUiVersion = Ui.Version;
-                        StateHasChanged();
-                    });
+                    await InvokeAsync(ApplyPendingChanges);
+                }
+                catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or JSDisconnectedException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Session.Errors.Record(ex, "devtools", "Refreshing the DevTools UI failed.");
                 }
             }
         }
@@ -139,6 +136,33 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
         }
         catch (ObjectDisposedException)
         {
+        }
+    }
+
+    private void ApplyPendingChanges()
+    {
+        var dataChanged = Session.Version != _lastVersion;
+        var uiChanged = Ui.Version != _lastUiVersion;
+        if (!dataChanged && !uiChanged)
+        {
+            return;
+        }
+
+        Session.RenderTracker.CloseBatch();
+        _lastVersion = Session.Version;
+        _lastUiVersion = Ui.Version;
+
+        var updateOpenPanel = Ui.IsOpen && (uiChanged || Ui.LiveUpdates);
+        if (updateOpenPanel)
+        {
+            Session.Components.Refresh();
+            Session.Diagnostics.Evaluate();
+            _viewRevision++;
+        }
+
+        if (!Ui.IsOpen || updateOpenPanel)
+        {
+            StateHasChanged();
         }
     }
 
@@ -217,6 +241,11 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
             {
                 Ui.ActivePanelId = prefs.Panel;
             }
+
+            if (prefs.Live is { } live)
+            {
+                Ui.LiveUpdates = live;
+            }
         }
         catch (JsonException)
         {
@@ -236,7 +265,7 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
 
         try
         {
-            var prefs = new Prefs { Open = Ui.IsOpen, Dock = Ui.Dock.ToString(), Theme = Ui.Theme.ToString(), Size = Ui.Size.ToString(), Panel = Ui.ActivePanelId };
+            var prefs = new Prefs { Open = Ui.IsOpen, Dock = Ui.Dock.ToString(), Theme = Ui.Theme.ToString(), Size = Ui.Size.ToString(), Panel = Ui.ActivePanelId, Live = Ui.LiveUpdates };
             await _module.InvokeVoidAsync("savePrefs", JsonSerializer.Serialize(prefs, PrefsJson));
         }
         catch (Exception ex) when (ex is JSException or JSDisconnectedException)
@@ -255,6 +284,8 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
         public string? Size { get; set; }
 
         public string? Panel { get; set; }
+
+        public bool? Live { get; set; }
     }
 
     // ----- IDevToolsCommandContext -----
@@ -276,6 +307,7 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
 
         Ui.CommandPaletteOpen = false;
         Ui.Touch();
+        _viewRevision++;
         _ = SavePrefsAsync();
         StateHasChanged();
     }
@@ -334,7 +366,25 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
 
     public void PersistPreferences() => _ = SavePrefsAsync();
 
-    public void Refresh() => StateHasChanged();
+    public void RefreshView() => Refresh();
+
+    public void Refresh()
+    {
+        RefreshCapturedData();
+        _viewRevision++;
+        StateHasChanged();
+    }
+
+    private void OnLiveChanged(ChangeEventArgs e)
+    {
+        Ui.LiveUpdates = e.Value is true;
+        Ui.Touch();
+        _ = SavePrefsAsync();
+        if (Ui.LiveUpdates)
+        {
+            Refresh();
+        }
+    }
 
     public void Toggle()
     {

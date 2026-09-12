@@ -2,7 +2,7 @@
 @using BlazorDevTools.Session
 @using BlazorDevTools.UI
 @using Microsoft.AspNetCore.Components.Server.Circuits
-@inject DevToolsSession Session
+@inherits DevToolsTab
 @inject CircuitRegistry Registry
 @inject IEnumerable<CircuitHandler> Handlers
 
@@ -69,8 +69,6 @@
 </div>
 
 @code {
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
     private CircuitInfo? _mine;
     private DevToolsEvent[] _events = [];
 

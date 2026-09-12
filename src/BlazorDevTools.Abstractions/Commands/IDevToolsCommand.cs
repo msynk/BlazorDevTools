@@ -36,5 +36,10 @@ public interface IDevToolsCommandContext
     {
     }
 
+    /// <summary>Re-reads captured data and re-renders the open tab.</summary>
+    void RefreshView()
+    {
+    }
+
     IServiceProvider Services { get; }
 }

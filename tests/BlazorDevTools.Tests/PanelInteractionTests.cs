@@ -93,6 +93,105 @@ public class PanelInteractionTests : BunitContext
     }
 
     [Fact]
+    public void Refresh_updates_the_open_tab_without_switching_panels()
+    {
+        var cut = RenderPanel();
+        cut.FindAll(".bdt-tab").First(t => t.TextContent.Contains("Network", StringComparison.Ordinal)).Click();
+        Assert.Contains("No HTTP requests captured", cut.Markup, StringComparison.Ordinal);
+
+        Session.Http.Add(new HttpRecord
+        {
+            Id = Session.Http.NextId(),
+            StartedAt = DateTimeOffset.UtcNow,
+            Method = "GET",
+            Url = "https://example.test/live-refresh",
+            StatusCode = 200,
+        });
+        Assert.DoesNotContain("live-refresh", cut.Markup, StringComparison.Ordinal);
+
+        cut.Find("button[aria-label='Refresh captured data']").Click();
+        Assert.Contains("live-refresh", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Live_updates_can_be_turned_off_and_the_open_tab_stays_stale_until_refresh()
+    {
+        var cut = RenderPanel();
+        cut.FindAll(".bdt-tab").First(t => t.TextContent.Contains("Network", StringComparison.Ordinal)).Click();
+        cut.Find("input[aria-label='Live updates']").Change(false);
+        Assert.False(Session.Ui.LiveUpdates);
+
+        Session.Http.Add(new HttpRecord
+        {
+            Id = Session.Http.NextId(),
+            StartedAt = DateTimeOffset.UtcNow,
+            Method = "GET",
+            Url = "https://example.test/live-off",
+            StatusCode = 204,
+        });
+        cut.Render();
+        Assert.DoesNotContain("live-off", cut.Markup, StringComparison.Ordinal);
+
+        cut.Find("button[aria-label='Refresh captured data']").Click();
+        Assert.Contains("live-off", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Live_preference_is_restored()
+    {
+        var cut = RenderPanel("""{"open":true,"live":false}""");
+        Assert.False(Session.Ui.LiveUpdates);
+        Assert.False(cut.Find("input[aria-label='Live updates']").HasAttribute("checked"));
+    }
+
+    /// <summary>
+    /// The panels render framework components an application renders too — <c>Virtualize</c>, <c>CascadingValue</c>,
+    /// <c>DynamicComponent</c> — so nothing about their type says they are DevTools'. Before ownership was inherited
+    /// from the parent, opening a tab wrote its own renders, render batches and <c>Virtualize.init</c> interop calls
+    /// into the very panels the developer was reading.
+    /// </summary>
+    [Fact]
+    public void DevTools_own_ui_never_appears_as_application_activity()
+    {
+        var cut = RenderPanel();
+        Session.Http.Add(new HttpRecord
+        {
+            Id = Session.Http.NextId(),
+            StartedAt = DateTimeOffset.UtcNow,
+            Method = "GET",
+            Url = "https://example.test/thing",
+            StatusCode = 200,
+        });
+
+        foreach (var tab in new[] { "Network", "Timeline", "Profiler", "Components" })
+        {
+            cut.FindAll(".bdt-tab").First(t => t.TextContent.Contains(tab, StringComparison.Ordinal)).Click();
+        }
+
+        cut.Find("button[aria-label='Refresh captured data']").Click();
+
+        Assert.All(Session.Components.All, record => Assert.True(
+            record.IsDevTools,
+            $"{record.TypeName} is rendered by the DevTools panel but is tracked as application activity."));
+        Assert.Empty(Session.Timeline.Snapshot());
+        Assert.Empty(Session.Interop.Snapshot());
+        Assert.Empty(Session.Components.BuildTree(includeHidden: true));
+    }
+
+    /// <summary>The inverse: the propagation must not swallow the application's own use of the same framework components.</summary>
+    [Fact]
+    public void Application_components_under_a_cascading_value_are_still_application_activity()
+    {
+        RenderPanel();
+        var cut = Render<AppHost>();
+
+        var child = Assert.Single(Session.Components.All, r => r.Type == typeof(ChildComponent));
+        Assert.False(child.IsDevTools);
+        Assert.Contains(Session.Timeline.Snapshot(), e => e.ComponentName == child.DisplayName);
+        Assert.NotNull(cut);
+    }
+
+    [Fact]
     public void Inspector_section_reacts_when_collapsed_parameter_changes()
     {
         var cut = Render<InspectorSection>(parameters => parameters
@@ -173,6 +272,23 @@ public class PanelInteractionTests : BunitContext
         Assert.DoesNotContain("No JS interop calls captured", cut.Markup, StringComparison.Ordinal);
         cut.Find("input[aria-label='Filter JS interop calls']").Input("CartWidget");
         Assert.Contains("module:invoke", cut.Markup, StringComparison.Ordinal);
+    }
+
+    /// <summary>An application component nested in the framework components the panels also use.</summary>
+    private sealed class AppHost : ComponentBase
+    {
+        protected override void BuildRenderTree(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+        {
+            builder.OpenComponent<CascadingValue<int>>(0);
+            builder.AddComponentParameter(1, nameof(CascadingValue<int>.Value), 7);
+            builder.AddComponentParameter(2, nameof(CascadingValue<int>.ChildContent), (RenderFragment)(b =>
+            {
+                b.OpenComponent<ChildComponent>(0);
+                b.AddComponentParameter(1, nameof(ChildComponent.Text), "app");
+                b.CloseComponent();
+            }));
+            builder.CloseComponent();
+        }
     }
 
     [Fact]

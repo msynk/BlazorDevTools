@@ -61,6 +61,7 @@ public sealed class DevToolsSession : IDisposable
             IsOpen = options.Ui.OpenByDefault,
             Dock = options.Ui.Dock,
             Theme = options.Ui.Theme,
+            LiveUpdates = options.Ui.LiveUpdates,
         };
         Browser = new BrowserState();
         StartedAt = DateTimeOffset.UtcNow;

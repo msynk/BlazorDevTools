@@ -1,4 +1,5 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 
 <div class="bdt-split">
     <div class="bdt-left">
@@ -63,12 +64,6 @@
 
 @code {
     private sealed record Row(ComponentTreeNode Node);
-
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsSession Session => Host.Session;
-
-    private DevToolsUiState Ui => Host.Ui;
 
     private string? Query => Ui.GetQuery("components");
 

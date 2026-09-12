@@ -1,4 +1,5 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 @using BlazorDevTools.Capabilities
 
 <div class="bdt-scroll" style="flex:1">
@@ -11,7 +12,7 @@
         <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Ms(o.DiagnosticsMs)</div><div class="bdt-stat-label">diagnostics rules</div></div>
         <div class="bdt-stat"><div class="bdt-stat-value">@Fmt.Ms(o.TreeRefreshMs)</div><div class="bdt-stat-label">tree refresh</div></div>
         <div class="bdt-stat"><div class="bdt-stat-value">@Session.Timeline.Count / @Session.Options.MaxEvents</div><div class="bdt-stat-label">events buffered</div></div>
-        <div class="bdt-stat"><div class="bdt-stat-value">@Session.Components.LiveCount</div><div class="bdt-stat-label">live component instances (@Session.Components.TrackedCount records incl. recently disposed)</div></div>
+        <div class="bdt-stat"><div class="bdt-stat-value">@Session.Components.LiveCount</div><div class="bdt-stat-label">live application component instances (@Session.Components.TrackedCount records tracked in total, incl. DevTools' own UI and recently disposed)</div></div>
     </div>
     @if (Session.Components.IsTruncated)
     {
@@ -54,10 +55,6 @@
 </div>
 
 @code {
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsSession Session => Host.Session;
-
     private string FrameworkDiagnostics()
     {
         var (activitySource, metrics) = Session.FrameworkInstrumentation;

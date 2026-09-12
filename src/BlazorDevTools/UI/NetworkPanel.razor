@@ -1,4 +1,5 @@
 @namespace BlazorDevTools.UI
+@inherits DevToolsTab
 
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:58%">
@@ -79,12 +80,6 @@
 </div>
 
 @code {
-    [CascadingParameter] public DevToolsPanel Host { get; set; } = default!;
-
-    private DevToolsSession Session => Host.Session;
-
-    private DevToolsUiState Ui => Host.Ui;
-
     private string? Query => Ui.GetQuery("network");
 
     private HttpRecord[] _all = [];
@@ -115,5 +110,9 @@
         _duplicates = _selected is null ? 0 : _all.Count(r => r.Signature == _selected.Signature);
     }
 
-    private void OnQuery(ChangeEventArgs e) => Ui.SetQuery("network", e.Value?.ToString());
+    private void OnQuery(ChangeEventArgs e)
+    {
+        Ui.SetQuery("network", e.Value?.ToString());
+        OnParametersSet();
+    }
 }

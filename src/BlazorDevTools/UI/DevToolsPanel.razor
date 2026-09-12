@@ -53,6 +53,10 @@
                             }
                         </div>
                         <div class="bdt-tools">
+                            <label class="@(Ui.LiveUpdates ? "" : "bdt-off")" title="When on, the open tab re-reads captured data as it arrives. Turn off on a very busy app and use Refresh.">
+                                <input type="checkbox" checked="@Ui.LiveUpdates" aria-label="Live updates" @onchange="OnLiveChanged" /> live
+                            </label>
+                            <button type="button" title="Re-read captured data now" aria-label="Refresh captured data" @onclick="Refresh">↻ Refresh</button>
                             <button type="button" title="Search or run a command (Ctrl+K)" @onclick="() => OpenPalette()">🔍 Search / &gt; command</button>
                             <button type="button" title="Theme: @Ui.Theme" @onclick="SetTheme">◐</button>
                             <button type="button" title="Dock: @Ui.Dock" @onclick="SetDock">@(Ui.Dock == DevToolsDock.Bottom ? "▭" : "▯")</button>
@@ -65,7 +69,10 @@
                             Keyed on the active panel id. Every case of the switch below renders a different component
                             at the same position in the render tree; without a key the diff reuses that position and
                             the newly shown panel ends up without its event handlers, so its buttons do nothing.
+                            bdt-rev is cascaded so the open tab's SetParametersAsync runs when captured data changes:
+                            built-in tabs have no other parameters, and Blazor skips the call when they are unchanged.
                         *@
+                        <CascadingValue Name="bdt-rev" Value="_viewRevision">
                         <div class="bdt-panel-host" @key="Ui.ActivePanelId">
                         @switch (Ui.ActivePanelId)
                         {
@@ -93,6 +100,7 @@
                                 break;
                         }
                         </div>
+                        </CascadingValue>
                         @if (Ui.CommandPaletteOpen)
                         {
                             <CommandPalette Initial="@_searchText" />

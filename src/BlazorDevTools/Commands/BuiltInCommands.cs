@@ -36,6 +36,19 @@ internal static class BuiltInCommands
             ctx.Services.GetRequiredService<DevToolsSession>().ClearAll();
             ctx.Notify("Captured event histories cleared");
         }, keywords: ["reset"]),
+        new DelegateCommand("ui.refresh", "Refresh captured data now", "DevTools", (ctx, _) =>
+        {
+            ctx.RefreshView();
+            ctx.Notify("Refreshed");
+        }, keywords: ["reload", "update", "live"]),
+        new DelegateCommand("ui.live", "Toggle live updates", "DevTools", (ctx, _) =>
+        {
+            var ui = ctx.Services.GetRequiredService<DevToolsSession>().Ui;
+            ui.LiveUpdates = !ui.LiveUpdates;
+            ui.Touch();
+            ctx.PersistPreferences();
+            ctx.Notify(ui.LiveUpdates ? "Live updates on" : "Live updates off");
+        }, keywords: ["realtime", "polling", "auto"]),
         new DelegateCommand("ui.theme", "Toggle theme", "DevTools", (ctx, _) =>
         {
             var ui = ctx.Services.GetRequiredService<DevToolsSession>().Ui;

@@ -69,6 +69,12 @@ public sealed class DevToolsUiOptions
     /// <summary>How often the UI checks for new activity while open, in milliseconds. The UI never re-renders without changes.</summary>
     public int RefreshIntervalMs { get; set; } = 250;
 
+    /// <summary>
+    /// When true (default) the open tab re-reads captured data as it arrives. Turn off on a very busy app and use
+    /// the Refresh button; capture itself keeps running either way.
+    /// </summary>
+    public bool LiveUpdates { get; set; } = true;
+
     /// <summary>Keyboard shortcut that toggles the panel. Format: modifiers + key, e.g. "Ctrl+Shift+D".</summary>
     public string ToggleShortcut { get; set; } = "Ctrl+Shift+D";
 
