@@ -26,6 +26,40 @@ internal static class BuiltInCommands
         }),
         new DelegateCommand("browser.show", "Show browser activity", "Browser", (ctx, _) => ctx.ShowPanel("browser"), keywords: ["storage", "online", "reconnect"]),
         new DelegateCommand("about.show", "Show capabilities and overhead", "DevTools", (ctx, _) => ctx.ShowPanel("about"), keywords: ["about", "capabilities", "overhead", "cost"]),
+        new DelegateCommand("capture.toggle", "Pause or resume capture", "DevTools", (ctx, _) =>
+        {
+            var session = ctx.Services.GetRequiredService<DevToolsSession>();
+            if (session.IsCapturing)
+            {
+                session.PauseCapture();
+                ctx.Notify("Capture paused: buffers are frozen, errors are still collected");
+            }
+            else
+            {
+                session.ResumeCapture();
+                ctx.Notify("Capture resumed");
+            }
+
+            ctx.RefreshView();
+        }, keywords: ["pause", "resume", "freeze", "record", "stop"]),
+        new DelegateCommand("profiler.reset", "Reset profiler baseline", "Profiler", (ctx, _) =>
+        {
+            ctx.Services.GetRequiredService<DevToolsSession>().Components.MarkBaseline();
+            ctx.ShowPanel("profiler");
+            ctx.Notify("Profiler baseline reset: counts now show renders since this moment");
+        }, keywords: ["counters", "zero", "restart", "mark", "since"]),
+        new DelegateCommand("session.export", "Export session as JSON", "DevTools", async (ctx, _) =>
+        {
+            var session = ctx.Services.GetRequiredService<DevToolsSession>();
+            var json = Export.SessionExporter.ToJson(session);
+            var name = $"blazor-devtools-session-{session.Id}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.json";
+            ctx.Notify(await ctx.DownloadTextAsync(name, json, "application/json") ? "Export downloaded: " + name : "Export unavailable: the browser bridge is not attached");
+        }, keywords: ["download", "save", "share", "dump", "file"]),
+        new DelegateCommand("session.report", "Copy diagnostics report", "DevTools", async (ctx, _) =>
+        {
+            var session = ctx.Services.GetRequiredService<DevToolsSession>();
+            ctx.Notify(await ctx.CopyTextAsync(Export.SessionExporter.ToMarkdownReport(session)) ? "Report copied as Markdown" : "Clipboard unavailable");
+        }, keywords: ["markdown", "summary", "clipboard", "issue", "share"]),
         new DelegateCommand("timeline.clear", "Clear timeline", "Timeline", (ctx, _) =>
         {
             ctx.Services.GetRequiredService<DevToolsSession>().Timeline.Clear();
@@ -77,8 +111,17 @@ internal static class BuiltInCommands
         }, keywords: ["hide"]),
     ];
 
-    private sealed class DelegateCommand(string id, string title, string category, Action<IDevToolsCommandContext, string?> action, bool acceptsArgument = false, string[]? keywords = null) : IDevToolsCommand
+    private sealed class DelegateCommand(string id, string title, string category, Func<IDevToolsCommandContext, string?, Task> action, bool acceptsArgument = false, string[]? keywords = null) : IDevToolsCommand
     {
+        public DelegateCommand(string id, string title, string category, Action<IDevToolsCommandContext, string?> action, bool acceptsArgument = false, string[]? keywords = null)
+            : this(id, title, category, (ctx, arg) =>
+            {
+                action(ctx, arg);
+                return Task.CompletedTask;
+            }, acceptsArgument, keywords)
+        {
+        }
+
         public string Id => id;
 
         public string Title => title;
@@ -89,10 +132,6 @@ internal static class BuiltInCommands
 
         public bool AcceptsArgument => acceptsArgument;
 
-        public Task ExecuteAsync(IDevToolsCommandContext context, string? argument)
-        {
-            action(context, argument);
-            return Task.CompletedTask;
-        }
+        public Task ExecuteAsync(IDevToolsCommandContext context, string? argument) => action(context, argument);
     }
 }

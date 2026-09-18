@@ -11,6 +11,10 @@
             {
                 <button type="button" class="bdt-badge" title="Open Blazor DevTools (@Options.Ui.ToggleShortcut)" aria-label="Open Blazor DevTools" @onclick="Toggle">
                     <span>⚙ DevTools</span>
+                    @if (!Session.IsCapturing)
+                    {
+                        <span class="bdt-pill bdt-chip bdt-warn" title="Capture is paused">⏸</span>
+                    }
                     @if (Session.Errors.Count > 0)
                     {
                         <span class="bdt-pill bdt-chip bdt-err">@Session.Errors.Count</span>
@@ -53,6 +57,7 @@
                             }
                         </div>
                         <div class="bdt-tools">
+                            <button type="button" class="@(Session.IsCapturing ? "" : "bdt-paused")" title="@(Session.IsCapturing ? "Pause capture: freeze every buffer so what you are reading is not evicted. Errors are still collected." : "Resume capture" + (Session.PausedAt is { } pausedAt ? " (paused " + Fmt.Ago(pausedAt) + ")" : ""))" aria-label="@(Session.IsCapturing ? "Pause capture" : "Resume capture")" aria-pressed="@(Session.IsCapturing ? "false" : "true")" @onclick="ToggleCapture">@(Session.IsCapturing ? "⏸ Pause" : "▶ Resume")</button>
                             <label class="@(Ui.LiveUpdates ? "" : "bdt-off")" title="When on, the open tab re-reads captured data as it arrives. Turn off on a very busy app and use Refresh.">
                                 <input type="checkbox" checked="@Ui.LiveUpdates" aria-label="Live updates" @onchange="OnLiveChanged" /> live
                             </label>

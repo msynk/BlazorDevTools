@@ -1,0 +1,20 @@
+# Normalise line endings to LF in the repository; the working tree follows the platform (core.autocrlf).
+* text=auto
+
+*.cs text diff=csharp
+*.razor text
+*.js text
+*.mjs text
+*.css text
+*.json text
+*.md text
+*.csproj text
+*.props text
+*.targets text
+*.slnx text
+*.yml text
+
+*.png binary
+*.ico binary
+*.snupkg binary
+*.nupkg binary

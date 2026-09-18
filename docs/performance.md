@@ -45,6 +45,11 @@ Read these carefully:
 | `CaptureComponentStateOnRender = false` (default) | Field snapshots and diffs are taken only for the component selected in the inspector. |
 | `TrackJsInterop = false`, `TrackHttp = false` | Removes the JS runtime wrapper / HTTP handler entirely. |
 | `UseFrameworkInstrumentation = false` | Stops DevTools registering the framework's ActivitySource and meters. Render causes degrade to *StateHasChanged*. |
+| Pause capture (header button, `session.PauseCapture()`) | Stops all recording at runtime without uninstalling anything: the render wrapper degrades to one flag check and one counter increment, and every other path returns before allocating. |
+
+Forced-render detection (parameter flattening and diffing before a render) runs only for the component selected in the
+inspector, like the field diff it sits next to, and is bounded the same way (depth 2, 25 items, 150 entries per
+parameter, the inspector's 50 ms wall-clock budget). It is not on the hot path for any other component.
 
 ## Where the remaining cost is
 

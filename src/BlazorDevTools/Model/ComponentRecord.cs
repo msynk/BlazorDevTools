@@ -43,6 +43,24 @@ public sealed class RenderSample
     /// <summary>Component fields that changed since the previous render, when state capture is enabled for the component.</summary>
     public IReadOnlyList<string>? ChangedState { get; set; }
 
+    /// <summary>
+    /// Parameters and cascading values whose observable value changed since the previous render ("Name: before → after"),
+    /// when state capture is enabled for the component. Empty when they were compared and nothing changed; null when
+    /// they were not compared (capture started with this render).
+    /// </summary>
+    public IReadOnlyList<string>? ChangedParameters { get; set; }
+
+    /// <summary>True when parameter values were compared with the previous render's (an empty list means "compared, nothing changed").</summary>
+    public bool ParametersCompared => ChangedParameters is not null;
+
+    /// <summary>
+    /// A re-render the parent forced by re-applying parameters whose observable values were identical to the previous
+    /// render. Blazor cannot skip it on its own (it only short-circuits for primitive-typed parameters); the component
+    /// can, with <c>ShouldRender</c>, or the parent can stop recreating equivalent values. Only decided for renders
+    /// where the parameters were compared.
+    /// </summary>
+    public bool IsWastedRender => Cause == RenderCause.ParentRender && ChangedParameters is { Count: 0 };
+
     public bool Failed { get; set; }
 }
 
@@ -53,6 +71,10 @@ public sealed class ComponentRecord
     private readonly WeakReference<IComponent> _component;
     private int _renderCount;
     private int _errorCount;
+    private int _wastedRenders;
+    private int _baselineRenderCount;
+    private double _baselineTotalMs;
+    private double _maxRenderMsSinceBaseline;
 
     internal ComponentRecord(long instanceId, IComponent component, Type type, int maxRenders, bool isDevTools, bool isHidden)
     {
@@ -132,6 +154,35 @@ public sealed class ComponentRecord
 
     public int ErrorCount => Volatile.Read(ref _errorCount);
 
+    /// <summary>
+    /// Renders forced by the parent whose parameters were observably identical to the previous render (see
+    /// <see cref="RenderSample.IsWastedRender"/>). Only counted while the component's state is captured, i.e. while
+    /// it is selected in the inspector or when <see cref="DevToolsOptions.CaptureComponentStateOnRender"/> is on.
+    /// </summary>
+    public int ParentRendersWithUnchangedParameters => Volatile.Read(ref _wastedRenders);
+
+    /// <summary>When the profiler baseline was last reset, or null when statistics cover the whole session.</summary>
+    public DateTimeOffset? BaselineAt { get; private set; }
+
+    /// <summary>Renders since <see cref="MarkBaseline"/>; equals <see cref="RenderCount"/> when no baseline was set.</summary>
+    public int RendersSinceBaseline => RenderCount - Volatile.Read(ref _baselineRenderCount);
+
+    public double RenderMsSinceBaseline => TotalRenderMs - _baselineTotalMs;
+
+    public double MaxRenderMsSinceBaseline => _maxRenderMsSinceBaseline;
+
+    /// <summary>
+    /// Starts a new profiling window: the "since baseline" figures restart from zero while the raw counters keep
+    /// running, so render-cause detection (which relies on <see cref="RenderCount"/>) is unaffected.
+    /// </summary>
+    internal void MarkBaseline(DateTimeOffset at)
+    {
+        Volatile.Write(ref _baselineRenderCount, RenderCount);
+        _baselineTotalMs = TotalRenderMs;
+        _maxRenderMsSinceBaseline = 0;
+        BaselineAt = at;
+    }
+
     public bool IsDisposed { get; internal set; }
 
     public DateTimeOffset? DisposedAt { get; internal set; }
@@ -163,6 +214,9 @@ public sealed class ComponentRecord
 
     internal Dictionary<string, string>? LastStateSnapshot { get; set; }
 
+    /// <summary>Flattened parameter values at the previous captured render, used to tell a forced re-render from a needed one.</summary>
+    internal Dictionary<string, string>? LastParameterSnapshot { get; set; }
+
     public RenderSample? LastRender => _renders.Last;
 
     public RenderSample[] Renders => _renders.ToArray();
@@ -173,6 +227,7 @@ public sealed class ComponentRecord
         _component.SetTarget(null!);
         _renderer = null;
         LastStateSnapshot = null;
+        LastParameterSnapshot = null;
     }
 
     internal void AddRender(RenderSample sample)
@@ -185,12 +240,32 @@ public sealed class ComponentRecord
             MaxRenderMs = sample.DurationMs;
         }
 
+        if (sample.DurationMs > _maxRenderMsSinceBaseline)
+        {
+            _maxRenderMsSinceBaseline = sample.DurationMs;
+        }
+
+        if (sample.IsWastedRender)
+        {
+            Interlocked.Increment(ref _wastedRenders);
+        }
+
         LastRenderAt = sample.At;
         LastRenderTicks = sample.StartTicks;
         _renders.Add(sample);
     }
 
     internal void AddError() => Interlocked.Increment(ref _errorCount);
+
+    private int _skippedRenders;
+
+    /// <summary>Renders that happened while capture was paused. They still count as "has rendered" for cause detection.</summary>
+    public int SkippedRenders => Volatile.Read(ref _skippedRenders);
+
+    /// <summary>True once the instance has rendered at least once, recorded or not.</summary>
+    internal bool HasRendered => RenderCount > 0 || SkippedRenders > 0;
+
+    internal void NoteSkippedRender() => Interlocked.Increment(ref _skippedRenders);
 
     public int Depth
     {
@@ -210,7 +285,7 @@ public sealed class ComponentRecord
 
     public ComponentSnapshot ToSnapshot() => new(
         InstanceId, TypeName, DisplayName, ParentInstanceId, Depth, RenderCount, TotalRenderMs, LastRenderMs, MaxRenderMs,
-        CreatedAt, LastRenderAt, IsDisposed, ErrorCount, IsHidden);
+        CreatedAt, LastRenderAt, IsDisposed, ErrorCount, IsHidden, ParentRendersWithUnchangedParameters);
 
     public override string ToString() => $"{DisplayName}#{InstanceId}";
 }

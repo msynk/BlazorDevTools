@@ -43,7 +43,23 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
 
     public ServiceGraph? Graph => Session.Registry.ServiceGraph;
 
-    public IReadOnlyList<DevToolsPanelDescriptor> ExtensionPanels => Session.Registry.Panels.Where(p => p.RequiredPlatform is null || string.Equals(p.RequiredPlatform, Session.Platform, StringComparison.OrdinalIgnoreCase)).ToList();
+    private IReadOnlyList<DevToolsPanelDescriptor>? _extensionPanels;
+    private string? _extensionPanelsPlatform;
+
+    /// <summary>Extension panels applicable to this session's platform. Cached: the header reads it several times per render.</summary>
+    public IReadOnlyList<DevToolsPanelDescriptor> ExtensionPanels
+    {
+        get
+        {
+            if (_extensionPanels is null || !string.Equals(_extensionPanelsPlatform, Session.Platform, StringComparison.Ordinal))
+            {
+                _extensionPanelsPlatform = Session.Platform;
+                _extensionPanels = Session.Registry.Panels.Where(p => p.RequiredPlatform is null || string.Equals(p.RequiredPlatform, Session.Platform, StringComparison.OrdinalIgnoreCase)).ToArray();
+            }
+
+            return _extensionPanels;
+        }
+    }
 
     private static readonly (string Id, string Title)[] BuiltInPanels =
     [
@@ -396,6 +412,43 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
 
         Ui.Touch();
         _ = SavePrefsAsync();
+    }
+
+    /// <summary>Pauses or resumes capture and re-reads the open tab so the marker event shows up immediately.</summary>
+    public void ToggleCapture()
+    {
+        if (Session.IsCapturing)
+        {
+            Session.PauseCapture();
+        }
+        else
+        {
+            Session.ResumeCapture();
+        }
+
+        Ui.Touch();
+        Refresh();
+    }
+
+    /// <summary>Part of <see cref="IDevToolsCommandContext"/>: copies text through the browser bridge.</summary>
+    public Task<bool> CopyTextAsync(string text) => CopyAsync(text);
+
+    /// <summary>Part of <see cref="IDevToolsCommandContext"/>: offers a text file for download through the browser bridge.</summary>
+    public async Task<bool> DownloadTextAsync(string fileName, string content, string contentType = "text/plain")
+    {
+        if (_module is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await _module.InvokeAsync<bool>("downloadText", fileName, content, contentType);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

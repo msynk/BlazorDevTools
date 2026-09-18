@@ -132,12 +132,22 @@
 
         if (_selected is { } s)
         {
-            _findings = graph.Analyze().Where(d => d.Evidence.Contains(s.ServiceTypeName, StringComparison.Ordinal) || d.Title.Contains(s.ServiceTypeName, StringComparison.Ordinal)).ToList();
+            _findings = graph.Findings.Where(d => d.Evidence.Contains(s.ServiceTypeName, StringComparison.Ordinal) || d.Title.Contains(s.ServiceTypeName, StringComparison.Ordinal)).ToList();
             _componentConsumers = Host.Session.Components.All.Where(c => !c.IsDisposed && !c.IsDevTools)
-                .Where(c => c.Type.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic).Any(p => p.IsDefined(typeof(InjectAttribute), true) && p.PropertyType == s.ServiceType))
+                .Where(c => Array.IndexOf(InjectedTypes(c.Type), s.ServiceType) >= 0)
                 .Select(c => c.DisplayName).Distinct().OrderBy(n => n).ToList();
         }
     }
+
+    // Reflected once per component type: this runs on every refresh for every live component while a service is selected.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Type[]> InjectedTypeCache = new();
+
+    private static Type[] InjectedTypes(Type componentType) => InjectedTypeCache.GetOrAdd(componentType, static t =>
+        t.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)
+            .Where(p => p.IsDefined(typeof(InjectAttribute), true))
+            .Select(p => p.PropertyType)
+            .Distinct()
+            .ToArray());
 
     private void OnQuery(ChangeEventArgs e)
     {

@@ -252,3 +252,26 @@ export function copyText(text) {
     }
     return false;
 }
+
+// Offers captured data as a file. The content is built on the .NET side (already redacted and bounded); this only
+// hands it to the browser's download machinery and revokes the object URL afterwards.
+export function downloadText(fileName, content, contentType) {
+    try {
+        const blob = new Blob([content], { type: contentType || "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName || "blazor-devtools.txt";
+        a.rel = "noopener";
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            a.remove();
+            URL.revokeObjectURL(url);
+        }, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}

@@ -26,6 +26,17 @@ internal sealed class Timeline : IDevToolsTimeline
 
     public long Record(DevToolsEvent devToolsEvent)
     {
+        if (!_session.IsEnabled || !_session.IsCapturing)
+        {
+            return -1;
+        }
+
+        return RecordUnconditionally(devToolsEvent);
+    }
+
+    /// <summary>Records even while capture is paused. Only for the pause marker itself.</summary>
+    internal long RecordUnconditionally(DevToolsEvent devToolsEvent)
+    {
         if (!_session.IsEnabled)
         {
             return -1;

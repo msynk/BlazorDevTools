@@ -155,6 +155,14 @@ internal sealed class RenderTracker
             return default;
         }
 
+        if (!_session.IsCapturing)
+        {
+            // Paused: the buffers must stay frozen, but the instance must still count as "has rendered" so the next
+            // recorded render is not mislabeled as its first.
+            _session.NoteSkippedRender(record);
+            return default;
+        }
+
         var batch = DetectBatch(record);
         var (cause, detail, triggerId) = DetermineCause(record, batch);
         var sample = new RenderSample
@@ -466,7 +474,7 @@ internal sealed class RenderTracker
 
     private (RenderCause Cause, string Detail, long? TriggerEventId) DetermineCause(ComponentRecord record, RenderBatchInfo? batch)
     {
-        if (record.RenderCount == 0)
+        if (!record.HasRendered)
         {
             return (RenderCause.Initial, InitialCauseDetail, ActivityObserver.CurrentTriggerEvent(_session)?.Id);
         }
@@ -509,15 +517,21 @@ internal sealed class RenderTracker
         return (RenderCause.StateHasChanged, StateHasChangedCauseDetail, null);
     }
 
+    /// <summary>
+    /// Snapshots the component's fields and parameters before the render and diffs them against the previous
+    /// captured render. Fields answer "what state changed?"; parameters answer "did the parent give me anything new?",
+    /// which is what separates a needed re-render from one the parent merely forced.
+    /// </summary>
     private void CaptureStateDiff(ComponentRecord record, ComponentBase component, RenderSample sample)
     {
         var start = Stopwatch.GetTimestamp();
         try
         {
             var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var (name, value) in ComponentStateReader.ReadFields(component))
+            foreach (var (name, value, field) in ComponentStateReader.ReadFields(component))
             {
-                snapshot[name] = _session.Inspector.Describe(name, value).Display;
+                // The member is passed so [DevToolsSensitive] is honoured, not only the name patterns.
+                snapshot[name] = _session.Inspector.Describe(name, value, "", field).Display;
             }
 
             if (record.LastStateSnapshot is not null)
@@ -525,11 +539,38 @@ internal sealed class RenderTracker
                 var changes = Inspection.ObjectInspector.Diff(record.LastStateSnapshot, snapshot);
                 if (changes.Count > 0)
                 {
-                    sample.ChangedState = changes.Select(c => c.Path + ": " + (c.Before ?? "∅") + " → " + (c.After ?? "∅")).ToArray();
+                    sample.ChangedState = FormatChanges(changes);
                 }
             }
 
             record.LastStateSnapshot = snapshot;
+
+            var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, value, property) in ComponentStateReader.ReadParameters(component))
+            {
+                if (_session.Redactor.IsSensitive(property))
+                {
+                    parameters[name] = Inspection.Redactor.RedactedValue;
+                    continue;
+                }
+
+                parameters[name] = _session.Inspector.Describe(name, value, "", property).Display;
+                // One level deeper than the display string, so a list whose item changed is not mistaken for an
+                // identical parameter. Bounded: this only runs for the component that is being inspected.
+                foreach (var (path, display) in _session.Inspector.Flatten(value, maxDepth: 2, maxItems: 25, maxEntries: 150))
+                {
+                    parameters[path[0] == '[' ? name + path : name + "." + path] = display;
+                }
+            }
+
+            if (record.LastParameterSnapshot is not null)
+            {
+                var changes = Inspection.ObjectInspector.Diff(record.LastParameterSnapshot, parameters);
+                // A non-null list is what marks the sample as compared; the empty case shares one array.
+                sample.ChangedParameters = changes.Count == 0 ? Array.Empty<string>() : FormatChanges(changes);
+            }
+
+            record.LastParameterSnapshot = parameters;
         }
         catch
         {
@@ -540,6 +581,9 @@ internal sealed class RenderTracker
             _session.Overhead.AddInspection(Stopwatch.GetElapsedTime(start).Ticks);
         }
     }
+
+    private static string[] FormatChanges(List<Model.StateDiffEntry> changes) =>
+        changes.Select(c => c.Path + ": " + (c.Before ?? "∅") + " → " + (c.After ?? "∅")).ToArray();
 
     /// <summary>
     /// Replaces the component's <c>[Inject] IJSRuntime</c> with a tracking decorator. This happens on the first render,
@@ -580,12 +624,13 @@ internal sealed class RenderTracker
     }
 }
 
-/// <summary>Reads a component's own fields (state) excluding parameters, injected services and framework plumbing.</summary>
+/// <summary>Reads a component's own fields (state) excluding parameters, injected services and framework plumbing, and its parameters.</summary>
 internal static class ComponentStateReader
 {
     private static readonly ConcurrentDictionary<Type, (FieldInfo Field, string Name)[]> Cache = new();
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> ParameterCache = new();
 
-    public static IEnumerable<(string Name, object? Value)> ReadFields(object component)
+    public static IEnumerable<(string Name, object? Value, FieldInfo Field)> ReadFields(object component)
     {
         foreach (var (field, name) in Fields(component.GetType()))
         {
@@ -599,9 +644,56 @@ internal static class ComponentStateReader
                 value = "«threw " + ex.GetType().Name + "»";
             }
 
-            yield return (name, value);
+            yield return (name, value, field);
         }
     }
+
+    public static IEnumerable<(string Name, object? Value, PropertyInfo Property)> ReadParameters(object component)
+    {
+        foreach (var property in Parameters(component.GetType()))
+        {
+            object? value;
+            try
+            {
+                value = property.GetValue(component);
+            }
+            catch (Exception ex)
+            {
+                value = "«threw " + (ex is TargetInvocationException { InnerException: { } inner } ? inner : ex).GetType().Name + "»";
+            }
+
+            yield return (property.Name, value, property);
+        }
+    }
+
+    /// <summary>
+    /// <c>[Parameter]</c>, <c>[CascadingParameter]</c> and <c>[SupplyParameterFrom*]</c> properties, including
+    /// non-public ones declared on base classes (the framework assigns those too). Sorted by name so snapshots diff
+    /// deterministically.
+    /// </summary>
+    public static PropertyInfo[] Parameters(Type type) => ParameterCache.GetOrAdd(type, static t =>
+    {
+        var result = new Dictionary<string, PropertyInfo>(StringComparer.Ordinal);
+        for (var current = t; current is not null && current != typeof(object); current = current.BaseType)
+        {
+            foreach (var property in current.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            {
+                if (!property.CanRead || property.GetIndexParameters().Length != 0 || result.ContainsKey(property.Name)
+                    || property.IsDefined(typeof(DevToolsIgnoreAttribute), true))
+                {
+                    continue;
+                }
+
+                if (property.IsDefined(typeof(ParameterAttribute), true) || property.IsDefined(typeof(CascadingParameterAttribute), true)
+                    || property.IsDefined(typeof(SupplyParameterFromQueryAttribute), true) || property.IsDefined(typeof(SupplyParameterFromFormAttribute), true))
+                {
+                    result[property.Name] = property;
+                }
+            }
+        }
+
+        return result.Values.OrderBy(p => p.Name, StringComparer.Ordinal).ToArray();
+    });
 
     public static (FieldInfo Field, string Name)[] Fields(Type type) => Cache.GetOrAdd(type, static t =>
     {

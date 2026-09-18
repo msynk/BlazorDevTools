@@ -155,8 +155,10 @@ internal sealed class StateStore : IStateProviderRegistry, IDisposable
 
     private void OnChanged(StateProviderEntry entry, StateChangeInfo info)
     {
-        if (!_session.IsEnabled)
+        if (!_session.IsEnabled || !_session.IsCapturing)
         {
+            // While paused the last snapshot is left as it was, so the first change after resuming diffs against
+            // the state the developer was looking at.
             return;
         }
 

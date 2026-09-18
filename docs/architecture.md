@@ -45,6 +45,29 @@ A render sample's cause is decided in this order, and the label says which rule 
    call. DevTools does not walk the stack to name the caller; the timeline's *Just before* section shows the surrounding
    activity instead.
 
+### Needed or forced?
+
+A parent-caused render answers *why*; the follow-up is whether the child got anything new. For the component that is
+being inspected (or every component when `CaptureComponentStateOnRender` is on) `RenderTracker` flattens the
+`[Parameter]`, `[CascadingParameter]` and `[SupplyParameterFrom*]` values before each render — display value plus one
+level of members, bounded to 25 collection items — and diffs them against the previous captured render. A parent-caused
+render with no observable difference is a **forced re-render** (`RenderSample.IsWastedRender`): Blazor only skips
+re-rendering when every parameter is a primitive it can compare, so a recreated list, lambda or anonymous object forces
+the child every time. The verdict is deliberately *observable-only*: delegates and render fragments compare by target
+method, redacted parameters compare equal, and the first captured render is never judged. The count is kept per
+instance (`ParentRendersWithUnchangedParameters`), shown in the inspector, exported, and used by the *Renders driven only
+by the parent* rule to escalate from information to warning with the sentence "all N compared renders received values
+identical to the previous render".
+
+### Pausing capture
+
+`DevToolsSession.IsCapturing` gates every capture path — `Timeline.Record`, the render sample, the HTTP handler, the
+JS interop wrapper, state-change notifications, JS→.NET batches — so a paused session's buffers are exactly what the
+developer was reading. Errors are still collected: losing one because the timeline was frozen would be worse than an
+inconsistent row, so they land in the error center with no timeline link. Renders that happen while paused increment a
+*skipped* counter on the record; cause detection uses "has rendered" rather than "has a recorded render", so the first
+render after resuming is not mislabeled as the initial one. The pause marker is the only event written while paused.
+
 ### Never observing itself
 
 A tool that reports its own activity is worse than one that reports nothing: it buries the developer's data under the
@@ -90,6 +113,15 @@ types (delegates, `RenderFragment`, `EventCallback`, tasks, streams, service pro
 redaction (`Redactor`: name patterns + `[DevToolsSensitive]`). `Flatten`/`Diff` produce bounded path→display maps for
 state and component-field change detection.
 
+### Export (`BlazorDevTools.Export`)
+
+`SessionExporter` turns a session into a `blazor-devtools/1` JSON document (`ToJson`) or a short Markdown report
+(`ToMarkdownReport`). It is written with `Utf8JsonWriter` rather than the reflection serializer so that arbitrary
+values an extension put into an event's `Data` bag can never make an export fail: primitives and string lists are
+written as themselves, everything else as bounded text. The export reads only what the panels read — the same stores,
+already redacted at capture time — and omits browser storage previews. `IDevToolsCommandContext.DownloadTextAsync` /
+`CopyTextAsync` hand the result to the browser bridge (`downloadText`, `copyText` in `devtools.js`).
+
 ### Diagnostics (`BlazorDevTools.Diagnostics`)
 
 Rules implement `IDiagnosticRule.Evaluate(IDiagnosticContext)` over component snapshots and recent events; findings are
@@ -124,7 +156,7 @@ Three tiers, because a developer tool that breaks its integrators is not infrast
 |---|---|---|
 | **Contract** — `BlazorDevTools.Abstractions` | `IDevToolsExtension`, `IDiagnosticRule`, `IDevToolsCommand`, `IStateProvider`, `IDevToolsTimeline`, `DevToolsEvent`, `Diagnostic`, `ComponentSnapshot`, the attributes. No Blazor dependency. | Treated as versioned public API. Additions are additive; removals are breaking changes. |
 | **Setup** | `AddBlazorDevTools`, `AddBlazorDevToolsServer`, `DevToolsOptions`, `<DevToolsPanel />`. | Stable. Options gain properties; defaults change only with a reason stated in the changelog. |
-| **Read models** — `BlazorDevTools.Model`, `BlazorDevTools.Session`, `ObjectInspector`, `Fmt`, `ValueTree` | What the built-in panels read and render. Public so an extension panel can present the same data the same way. | Usable, but shaped by the UI's needs; expect additive change and occasional refinement. |
+| **Read models** — `BlazorDevTools.Model`, `BlazorDevTools.Session`, `ObjectInspector`, `SessionExporter`, `Fmt`, `ValueTree` | What the built-in panels read and render. Public so an extension panel can present the same data the same way. | Usable, but shaped by the UI's needs; expect additive change and occasional refinement. The JSON export format is versioned (`format` field) so readers can tell versions apart. |
 
 Razor components other than `DevToolsPanel` are public because the Razor SDK makes them so, not because they are a
 supported surface. Depend on `ValueTree`, `InspectorSection` and `Fmt` if they help; treat the panels themselves as
@@ -150,5 +182,15 @@ internal.
 * Isolation and security: sessions never see each other, server-side background HTTP is not attributed to a circuit,
   a disabled or non-Development host registers nothing, the DI inspector never reads instance values.
 * Extensibility: one third-party-style extension contributing a panel, rule, command, state provider and formatter.
+* Forced-render detection: identical recreated parameters are marked forced, changed collection items are reported by
+  path, `[DevToolsSensitive]` fields and parameters never appear in a diff, the parent-driven rule escalates only with
+  evidence.
+* Capture control: every capture path respects pause, the application is untouched, errors survive, the first render
+  after resuming keeps its cause, state diffs span the pause.
+* Profiler: baseline resets the delta without touching raw counters, grouping by type aggregates and drills down, the
+  header pause button and the tree's ARIA attributes work when clicked.
+* Export: valid JSON with every section, a `Data` value whose `ToString` throws does not break it, redacted secrets
+  never appear in JSON or Markdown, DevTools' own UI is excluded.
 * Non-functional: parallel writers, session churn, bounded buffers, per-render overhead ceiling, disabled-mode footprint,
-  plus a reproducible benchmark (`tests/BlazorDevTools.Benchmarks`).
+  plus a reproducible benchmark (`tests/BlazorDevTools.Benchmarks`). CI runs everything on Linux and Windows with
+  warnings as errors.

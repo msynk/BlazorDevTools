@@ -5,6 +5,7 @@ using BlazorDevTools.Events;
 using BlazorDevTools.Extensions;
 using BlazorDevTools.Inspection;
 using BlazorDevTools.Instrumentation;
+using BlazorDevTools.Model;
 using BlazorDevTools.State;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,6 +37,8 @@ public sealed class DevToolsSession : IDisposable
     private static long _nextId;
     private long _version;
     private bool _activated;
+    private int _capturing = 1;
+    private int _skippedWhilePaused;
 
     public DevToolsSession(IServiceProvider services, DevToolsOptions options, DevToolsRegistry registry)
     {
@@ -132,6 +135,58 @@ public sealed class DevToolsSession : IDisposable
     /// <summary>Monotonic version incremented on any change; the UI polls it to decide whether to re-render.</summary>
     public long Version => Volatile.Read(ref _version);
 
+    /// <summary>
+    /// False while capture is paused: no renders, timeline events, HTTP requests, JS interop calls or state changes
+    /// are recorded, so the buffers stay exactly as they were when the developer pressed pause. Errors are still
+    /// collected (losing one because the timeline was frozen would be worse than an inconsistent row), and the
+    /// instrumentation itself stays installed so resuming is instant.
+    /// </summary>
+    public bool IsCapturing => Volatile.Read(ref _capturing) == 1;
+
+    public DateTimeOffset? PausedAt { get; private set; }
+
+    /// <summary>Freezes every buffer. Idempotent.</summary>
+    public void PauseCapture()
+    {
+        if (!IsEnabled || Interlocked.Exchange(ref _capturing, 0) == 0)
+        {
+            return;
+        }
+
+        // Recorded through the buffer directly: Record() refuses new events once the flag is down.
+        PausedAt = DateTimeOffset.UtcNow;
+        Timeline.RecordUnconditionally(new DevToolsEvent
+        {
+            Kind = DevToolsEventKind.Custom,
+            Category = "devtools",
+            Title = "Capture paused",
+            Detail = "Nothing below this line was recorded until capture resumed; errors were still collected.",
+            Severity = DevToolsSeverity.Warning,
+        });
+        Touch();
+    }
+
+    /// <summary>Resumes capture. Idempotent.</summary>
+    public void ResumeCapture()
+    {
+        if (!IsEnabled || Interlocked.Exchange(ref _capturing, 1) == 1)
+        {
+            return;
+        }
+
+        var pausedFor = PausedAt is { } at ? DateTimeOffset.UtcNow - at : TimeSpan.Zero;
+        PausedAt = null;
+        var skipped = Interlocked.Exchange(ref _skippedWhilePaused, 0);
+        Timeline.Record(new DevToolsEvent
+        {
+            Kind = DevToolsEventKind.Custom,
+            Category = "devtools",
+            Title = "Capture resumed",
+            Detail = $"paused for {pausedFor.TotalSeconds:0.#} s" + (skipped > 0 ? $"; {skipped} component render{(skipped == 1 ? "" : "s")} happened meanwhile and were not recorded" : ""),
+        });
+        Touch();
+    }
+
     /// <summary>Set once the renderer synchronization context has been mapped to this session.</summary>
     internal bool SynchronizationContextNoted { get; set; }
 
@@ -145,6 +200,13 @@ public sealed class DevToolsSession : IDisposable
     internal ConcurrentDictionary<string, LifecycleTypeMetrics> TypeMetrics { get; } = new(StringComparer.Ordinal);
 
     internal void Touch() => Interlocked.Increment(ref _version);
+
+    /// <summary>Called by the render tracker for each application render that happened while capture was paused.</summary>
+    internal void NoteSkippedRender(ComponentRecord record)
+    {
+        record.NoteSkippedRender();
+        Interlocked.Increment(ref _skippedWhilePaused);
+    }
 
     /// <summary>Wires DI-registered state providers, extension providers and commands. Called by the host component (not the constructor) to avoid DI cycles.</summary>
     internal void EnsureActivated()

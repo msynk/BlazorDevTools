@@ -1,9 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>BlazorDevTools.Server</RootNamespace>
     <Description>Blazor Server (interactive server / circuits) instrumentation for Blazor DevTools: circuit lifecycle, connection state, inbound activity and active circuit overview.</Description>
     <IsPackable>true</IsPackable>

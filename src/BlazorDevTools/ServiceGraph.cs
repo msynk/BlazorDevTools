@@ -47,14 +47,20 @@ public sealed class ServiceInfo
 /// </summary>
 public sealed class ServiceGraph
 {
+    private readonly Lazy<Diagnostic[]> _findings;
+
     private ServiceGraph(List<ServiceInfo> services)
     {
         Services = services;
+        _findings = new Lazy<Diagnostic[]>(() => ComputeFindings().ToArray(), LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public IReadOnlyList<ServiceInfo> Services { get; }
 
     public int Count => Services.Count;
+
+    /// <summary>The findings of <see cref="Analyze"/>, computed once: the graph is immutable, and the Services panel reads them on every refresh.</summary>
+    public IReadOnlyList<Diagnostic> Findings => _findings.Value;
 
     public static ServiceGraph Build(IServiceCollection collection)
     {
@@ -278,7 +284,9 @@ public sealed class ServiceGraph
     }
 
     /// <summary>Evidence-based findings about registrations: captive dependencies, cycles, unusually large graphs, shadowed registrations.</summary>
-    public IEnumerable<Diagnostic> Analyze()
+    public IEnumerable<Diagnostic> Analyze() => Findings;
+
+    private IEnumerable<Diagnostic> ComputeFindings()
     {
         foreach (var service in Services)
         {

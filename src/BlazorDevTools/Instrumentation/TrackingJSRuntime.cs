@@ -106,8 +106,14 @@ public class TrackingJSRuntime : IJSRuntime
         return result;
     }
 
-    internal JsInteropRecord Begin<TValue>(string identifier, object?[]? args, bool isModule, bool isSync)
+    /// <summary>Starts a record, or returns null while capture is paused (the call itself still goes through).</summary>
+    internal JsInteropRecord? Begin<TValue>(string identifier, object?[]? args, bool isModule, bool isSync)
     {
+        if (!Session.IsCapturing)
+        {
+            return null;
+        }
+
         var record = new JsInteropRecord
         {
             Id = Session.Interop.NextId(),
@@ -138,8 +144,19 @@ public class TrackingJSRuntime : IJSRuntime
         return record;
     }
 
-    internal void End(JsInteropRecord record, Exception? exception)
+    internal void End(JsInteropRecord? record, Exception? exception)
     {
+        if (record is null)
+        {
+            if (exception is not null and not OperationCanceledException)
+            {
+                // Errors are collected even while paused.
+                Session.Errors.Record(exception, "js-interop", component: Component);
+            }
+
+            return;
+        }
+
         var elapsed = Stopwatch.GetElapsedTime(record.StartTicks).TotalMilliseconds;
         var error = exception is null ? null : exception.GetType().Name + ": " + exception.Message;
         Session.Interop.Complete(record, elapsed, exception is null, error);

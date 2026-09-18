@@ -4,7 +4,7 @@ namespace BlazorDevTools.Internal;
 internal sealed class RingBuffer<T>
 {
     private readonly object _lock = new();
-    private T[] _items;
+    private readonly T[] _items;
     private int _head; // index of oldest
     private int _count;
     private long _version;
@@ -106,29 +106,6 @@ internal sealed class RingBuffer<T>
         }
     }
 
-    /// <summary>
-    /// Updates an item identified by key while holding the buffer lock.
-    /// This prevents readers and eviction from observing a partially updated record.
-    /// </summary>
-    public bool TryUpdateByKey(Func<T, long> key, long value, Action<T> update)
-    {
-        lock (_lock)
-        {
-            for (var i = _count - 1; i >= 0; i--)
-            {
-                var item = _items[(_head + i) % _items.Length];
-                if (key(item) == value)
-                {
-                    update(item);
-                    _version++;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-    }
-
     /// <summary>Atomically replaces an item identified by key.</summary>
     public bool TryReplaceByKey(Func<T, long> key, long value, Func<T, T> replace)
     {
@@ -166,29 +143,5 @@ internal sealed class RingBuffer<T>
 
             return default;
         }
-    }
-
-    public void Resize(int capacity)
-    {
-        lock (_lock)
-        {
-            var snapshot = ToArrayUnsafe();
-            _items = new T[Math.Max(1, capacity)];
-            _head = 0;
-            _count = Math.Min(snapshot.Length, _items.Length);
-            Array.Copy(snapshot, snapshot.Length - _count, _items, 0, _count);
-            _version++;
-        }
-    }
-
-    private T[] ToArrayUnsafe()
-    {
-        var result = new T[_count];
-        for (var i = 0; i < _count; i++)
-        {
-            result[i] = _items[(_head + i) % _items.Length];
-        }
-
-        return result;
     }
 }

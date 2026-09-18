@@ -8,7 +8,7 @@
             <label title="Show framework/library components that are hidden by default"><input type="checkbox" checked="@Ui.ShowHiddenComponents" @onchange="ToggleHidden" /> internals</label>
             <span class="bdt-muted bdt-nowrap">@_visible.Count / @_liveCount</span>
         </div>
-        <div class="bdt-scroll bdt-tree" tabindex="0" @onkeydown="OnKeyDown" @onkeydown:preventDefault="_preventDefault">
+        <div class="bdt-scroll bdt-tree" tabindex="0" role="tree" aria-label="Component tree" @onkeydown="OnKeyDown" @onkeydown:preventDefault="_preventDefault">
             @if (_visible.Count == 0)
             {
                 <div class="bdt-empty">No components tracked yet. Components are registered as they are created; interact with the page.</div>
@@ -20,11 +20,15 @@
                         var record = row.Node.Record;
                         var flash = record.LastRenderAt is { } at && (DateTimeOffset.UtcNow - at).TotalMilliseconds < 800;
                         var selected = Ui.SelectedComponentId == record.InstanceId;
+                        var hasChildren = row.Node.Children.Count > 0;
+                        var collapsed = hasChildren && Ui.CollapsedTreeNodes.Contains(record.InstanceId);
                     }
-                    <div class="bdt-tree-row @(selected ? "bdt-selected" : "") @(flash ? "bdt-flash" : "") @(record.IsHidden ? "bdt-hidden-comp" : "")" style="padding-left:@(row.Node.Depth * 14 + 4)px" @onclick="() => Select(record.InstanceId)" title="@record.TypeName">
-                        @if (row.Node.Children.Count > 0)
+                    <div class="bdt-tree-row @(selected ? "bdt-selected" : "") @(flash ? "bdt-flash" : "") @(record.IsHidden ? "bdt-hidden-comp" : "")"
+                         role="treeitem" aria-level="@(row.Node.Depth + 1)" aria-selected="@(selected ? "true" : "false")" aria-expanded="@(hasChildren ? (collapsed ? "false" : "true") : null)"
+                         style="padding-left:@(row.Node.Depth * 14 + 4)px" @onclick="() => Select(record.InstanceId)" title="@record.TypeName">
+                        @if (hasChildren)
                         {
-                            <span class="bdt-caret" @onclick:stopPropagation="true" @onclick="() => ToggleCollapse(record.InstanceId)">@(Ui.CollapsedTreeNodes.Contains(record.InstanceId) ? "▸" : "▾")</span>
+                            <span class="bdt-caret" role="presentation" @onclick:stopPropagation="true" @onclick="() => ToggleCollapse(record.InstanceId)">@(collapsed ? "▸" : "▾")</span>
                         }
                         else
                         {
@@ -39,6 +43,10 @@
                             @if (record.ErrorCount > 0)
                             {
                                 <span class="bdt-err">@record.ErrorCount ✕ </span>
+                            }
+                            @if (collapsed && row.Node.SubtreeRenders > record.RenderCount)
+                            {
+                                <span class="bdt-subtree" title="renders in the collapsed subtree · time">⊕ @row.Node.SubtreeRenders × · @Fmt.Ms(row.Node.SubtreeRenderMs)</span>
                             }
                             @if (record.RenderCount > 0)
                             {

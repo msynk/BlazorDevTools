@@ -58,12 +58,23 @@ internal static class BuiltInRules
                 var name = all[0].ComponentName ?? "component";
                 var ancestor = all.Select(e => e.Detail).FirstOrDefault(d => d is not null)?.Replace(" re-rendered (parameters re-applied)", "") ?? "its parent";
                 var totalMs = all.Sum(e => e.DurationMs ?? 0);
+                // Parameter comparison only runs while the component is inspected, so this is extra evidence when
+                // present and silence when absent, never a guess.
+                var compared = all.Count(e => e.TryGetData("parametersUnchanged", out var v) && v is bool);
+                var unchanged = all.Count(e => e.TryGetData("parametersUnchanged", out var v) && v is true);
+                var parameterEvidence = compared == 0
+                    ? "Select the component in the inspector to check whether the re-applied parameter values actually differ."
+                    : unchanged == compared
+                        ? $"All {compared} renders whose parameters were compared received values identical to the previous render: pure waste."
+                        : $"{unchanged} of {compared} compared renders received identical parameter values; the others got new values.";
+                var severity = compared > 0 && unchanged == compared ? DiagnosticSeverity.Warning : DiagnosticSeverity.Info;
                 yield return new Diagnostic(
                     Id,
-                    DiagnosticSeverity.Info,
+                    severity,
                     $"{name} re-rendered {parentDriven} times, every one of them because {ancestor} re-rendered",
                     $"None of these renders came from an event, navigation or its own state; total build time {Ms(totalMs)} in the last 10 s. "
-                        + "The parent re-applies parameters on every one of its own renders, and Blazor cannot know the values are equivalent.",
+                        + "The parent re-applies parameters on every one of its own renders, and Blazor cannot know the values are equivalent. "
+                        + parameterEvidence,
                     "Override ShouldRender, pass values the parent does not recreate per render (no new lambdas, collections or anonymous objects), or move the fast-changing state out of the parent so it does not re-render at all.",
                     Fingerprint: $"{Id}:{group.Key}",
                     ComponentInstanceId: group.Key,

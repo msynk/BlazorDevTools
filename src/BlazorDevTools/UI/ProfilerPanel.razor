@@ -5,33 +5,53 @@
 <div class="bdt-split">
     <div class="bdt-left" style="flex-basis:62%">
         <div class="bdt-toolbar">
-            <input type="text" placeholder='Filter: name, "renders>20", "sort:max|total|renders|avg|last"' value="@Query" @oninput="OnQuery" />
+            <input type="text" aria-label="Filter profiler" placeholder='Filter: name, "renders>20", "sort:max|total|renders|avg|last|instances"' value="@Query" @oninput="OnQuery" />
+            <label title="Aggregate all instances of a type into one row: the only way to see what 500 rows of a list cost together"><input type="checkbox" aria-label="Group by type" checked="@_byType" @onchange='e => { _byType = e.Value is true; OnParametersSet(); }' /> by type</label>
             <label><input type="checkbox" checked="@_includeDisposed" @onchange='e => { _includeDisposed = e.Value is true; OnParametersSet(); }' /> disposed</label>
-            <span class="bdt-muted bdt-nowrap">@_rows.Count components · @Session.RenderTracker.BatchCount batches</span>
+            <button type="button" aria-label="Reset profiler baseline" title="Start a new profiling window: counts and times restart from zero for every component (raw totals are kept). Reset, perform one interaction, read what rendered." @onclick="ResetBaseline">⟲ Reset</button>
+            @if (_baselineAt is { } baseline)
+            {
+                <label title="Show only what happened since the last reset (@Fmt.Time(baseline))"><input type="checkbox" aria-label="Since baseline" checked="@_sinceBaseline" @onchange='e => { _sinceBaseline = e.Value is true; OnParametersSet(); }' /> since reset @Fmt.Ago(baseline)</label>
+            }
+            <span class="bdt-muted bdt-nowrap">@_rows.Count @(_byType ? "types" : "components") · @Session.RenderTracker.BatchCount batches</span>
         </div>
         <div class="bdt-scroll">
             <table>
                 <thead>
                     <tr>
-                        <th class="bdt-sortable" @onclick='() => Sort("name")'>Component</th>
+                        <th class="bdt-sortable" @onclick='() => Sort("name")'>@(_byType ? "Type" : "Component")</th>
+                        @if (_byType)
+                        {
+                            <th class="bdt-num bdt-sortable" @onclick='() => Sort("instances")'>Instances</th>
+                        }
                         <th class="bdt-num bdt-sortable" @onclick='() => Sort("renders")'>Renders</th>
                         <th class="bdt-num bdt-sortable" @onclick='() => Sort("total")'>Total</th>
                         <th class="bdt-num bdt-sortable" @onclick='() => Sort("avg")'>Avg</th>
                         <th class="bdt-num bdt-sortable" @onclick='() => Sort("max")'>Max</th>
-                        <th class="bdt-num bdt-sortable" @onclick='() => Sort("last")'>Last</th>
-                        <th>Last cause</th>
+                        @if (!_byType)
+                        {
+                            <th class="bdt-num bdt-sortable" @onclick='() => Sort("last")'>Last</th>
+                        }
+                        <th>@(_byType ? "Causes" : "Last cause")</th>
                         <th style="width:120px"></th>
                     </tr>
                 </thead>
                 <tbody>
                     <Virtualize Items="_rows" ItemSize="23" Context="r" SpacerElement="tr">
-                        <tr class="bdt-row @(Ui.SelectedComponentId == r.InstanceId ? "bdt-selected" : "")" @onclick="() => Host.SelectComponent(r.InstanceId)">
+                        <tr class="bdt-row @(!_byType && Ui.SelectedComponentId == r.InstanceId ? "bdt-selected" : "")" @onclick="() => Open(r)">
                             <td class="bdt-mono bdt-truncate" style="max-width:220px" title="@r.TypeName">@r.DisplayName @(r.IsDisposed ? "†" : "")</td>
+                            @if (_byType)
+                            {
+                                <td class="bdt-num">@r.Instances</td>
+                            }
                             <td class="bdt-num">@r.RenderCount</td>
                             <td class="bdt-num">@Fmt.Ms(r.TotalRenderMs)</td>
                             <td class="bdt-num">@Fmt.Ms(r.AverageRenderMs)</td>
                             <td class="bdt-num @(r.MaxRenderMs >= Session.Options.Diagnostics.SlowRenderMs ? "bdt-err" : "")">@Fmt.Ms(r.MaxRenderMs)</td>
-                            <td class="bdt-num">@Fmt.Ms(r.LastRenderMs)</td>
+                            @if (!_byType)
+                            {
+                                <td class="bdt-num">@Fmt.Ms(r.LastRenderMs)</td>
+                            }
                             <td class="bdt-truncate bdt-muted" style="max-width:260px" title="@r.LastCause">@r.LastCause</td>
                             <td><span class="bdt-bar" style="width:@(Math.Max(1, 110 * r.TotalRenderMs / Math.Max(0.001, _maxTotal)))px"></span></td>
                         </tr>
@@ -40,7 +60,7 @@
             </table>
             @if (_rows.Count == 0)
             {
-                <div class="bdt-empty">No renders captured yet.</div>
+                <div class="bdt-empty">@(_sinceBaseline ? "Nothing rendered since the baseline was reset." : "No renders captured yet.")</div>
             }
         </div>
     </div>
@@ -91,7 +111,8 @@
 </div>
 
 @code {
-    private sealed record Row(long InstanceId, string DisplayName, string TypeName, int RenderCount, double TotalRenderMs, double AverageRenderMs, double MaxRenderMs, double LastRenderMs, string? LastCause, bool IsDisposed);
+    /// <summary>One row: an instance, or (grouped) every instance of a type. <see cref="InstanceId"/> is null for a group.</summary>
+    private sealed record Row(long? InstanceId, string DisplayName, string TypeName, int Instances, int RenderCount, double TotalRenderMs, double AverageRenderMs, double MaxRenderMs, double LastRenderMs, string? LastCause, bool IsDisposed);
 
     private string? Query => Ui.GetQuery("profiler");
 
@@ -99,6 +120,7 @@
     private DevToolsEvent[] _batches = [];
     private LifecycleTypeMetrics[] _typeMetrics = [];
     private double _maxTotal;
+    private DateTimeOffset? _baselineAt;
 
     /// <summary>Shows only the diffing part of a batch detail, and nothing at all when the diff was never measured.</summary>
     private static string DiffSummary(string? detail)
@@ -116,21 +138,57 @@
 
         return detail[(index + "ms building, ".Length)..];
     }
+
     private bool _includeDisposed;
+    private bool _byType;
+    private bool _sinceBaseline;
     private string _sort = "total";
 
     protected override void OnParametersSet()
     {
+        _baselineAt = Session.Components.BaselineAt;
+        if (_baselineAt is null)
+        {
+            _sinceBaseline = false;
+        }
+
         var filter = QueryFilter.Parse(Query);
         var sort = filter.Token("sort") ?? _sort;
         var minRenders = filter.IntToken("renders>") ?? 0;
-        var rows = Session.Components.All
-            .Where(c => !c.IsDevTools && !c.IsHidden && c.RenderCount > 0 && (_includeDisposed || !c.IsDisposed) && c.RenderCount > minRenders)
+        var since = _sinceBaseline;
+        var components = Session.Components.All
+            .Where(c => !c.IsDevTools && !c.IsHidden && (_includeDisposed || !c.IsDisposed))
             .Where(c => filter.MatchesText(c.DisplayName, c.TypeName))
-            .Select(c => new Row(c.InstanceId, c.DisplayName, c.TypeName, c.RenderCount, c.TotalRenderMs, c.TotalRenderMs / c.RenderCount, c.MaxRenderMs, c.LastRenderMs, c.LastRender?.CauseDetail, c.IsDisposed));
+            .Select(c => (Record: c, Renders: since ? c.RendersSinceBaseline : c.RenderCount, Ms: since ? c.RenderMsSinceBaseline : c.TotalRenderMs, Max: since ? c.MaxRenderMsSinceBaseline : c.MaxRenderMs))
+            .Where(c => c.Renders > 0 && c.Renders > minRenders);
+
+        IEnumerable<Row> rows;
+        if (_byType)
+        {
+            rows = components
+                .GroupBy(c => c.Record.TypeName)
+                .Select(g =>
+                {
+                    var renders = g.Sum(c => c.Renders);
+                    var total = g.Sum(c => c.Ms);
+                    // Which rule explained the renders of this type, most common first: "412 parent · 9 event".
+                    var causes = g.SelectMany(c => c.Record.Renders)
+                        .Where(r => !since || r.At >= _baselineAt)
+                        .GroupBy(r => r.Cause)
+                        .OrderByDescending(x => x.Count())
+                        .Select(x => x.Count() + " " + CauseLabel(x.Key));
+                    return new Row(null, g.First().Record.DisplayName, g.Key, g.Count(), renders, total, renders == 0 ? 0 : total / renders, g.Max(c => c.Max), 0, string.Join(" · ", causes), g.All(c => c.Record.IsDisposed));
+                });
+        }
+        else
+        {
+            rows = components.Select(c => new Row(c.Record.InstanceId, c.Record.DisplayName, c.Record.TypeName, 1, c.Renders, c.Ms, c.Ms / c.Renders, c.Max, c.Record.LastRenderMs, c.Record.LastRender?.CauseDetail, c.Record.IsDisposed));
+        }
+
         rows = sort switch
         {
             "name" => rows.OrderBy(r => r.DisplayName),
+            "instances" => rows.OrderByDescending(r => r.Instances),
             "renders" => rows.OrderByDescending(r => r.RenderCount),
             "avg" => rows.OrderByDescending(r => r.AverageRenderMs),
             "max" => rows.OrderByDescending(r => r.MaxRenderMs),
@@ -141,6 +199,38 @@
         _maxTotal = _rows.Count == 0 ? 0 : _rows.Max(r => r.TotalRenderMs);
         _batches = Session.Timeline.Snapshot().Where(e => e.Kind == DevToolsEventKind.RenderBatch).Reverse().Take(25).ToArray();
         _typeMetrics = Session.TypeMetrics.Values.OrderByDescending(m => m.ParameterUpdateMs + m.EventHandlerMs).Take(30).ToArray();
+    }
+
+    private static string CauseLabel(RenderCause cause) => cause switch
+    {
+        RenderCause.ParentRender => "parent",
+        RenderCause.UiEvent => "event",
+        RenderCause.StateHasChanged => "StateHasChanged",
+        RenderCause.Navigation => "navigation",
+        RenderCause.Initial => "initial",
+        _ => "unknown",
+    };
+
+    private void Open(Row row)
+    {
+        if (row.InstanceId is { } id)
+        {
+            Host.SelectComponent(id);
+        }
+        else
+        {
+            // A type row: switch to instances filtered to that type, so the developer can pick the offender.
+            _byType = false;
+            Ui.SetQuery("profiler", row.DisplayName);
+            OnParametersSet();
+        }
+    }
+
+    private void ResetBaseline()
+    {
+        Session.Components.MarkBaseline();
+        _sinceBaseline = true;
+        OnParametersSet();
     }
 
     private void OnQuery(ChangeEventArgs e)

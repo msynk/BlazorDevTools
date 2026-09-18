@@ -85,6 +85,51 @@ test("storage values are redacted before leaving the browser", async () => {
     assert.equal(entries.find(entry => entry.key === "theme").redacted, false);
 });
 
+test("downloadText hands the export to the browser and cleans up after itself", async () => {
+    installBrowser();
+    const clicks = [];
+    const appended = [];
+    let removed = 0;
+    const anchor = {
+        style: {},
+        click() { clicks.push({ href: this.href, download: this.download, rel: this.rel }); },
+        remove() { removed++; },
+    };
+    globalThis.document.createElement = tag => {
+        assert.equal(tag, "a");
+        return anchor;
+    };
+    globalThis.document.body = { appendChild: node => appended.push(node) };
+    const revoked = [];
+    const originalRevoke = URL.revokeObjectURL;
+    URL.revokeObjectURL = url => revoked.push(url);
+    try {
+        const bridge = await loadBridge();
+
+        const ok = bridge.downloadText("session.json", "{\"format\":\"blazor-devtools/1\"}", "application/json");
+
+        assert.equal(ok, true);
+        assert.equal(appended.length, 1);
+        assert.equal(clicks.length, 1);
+        assert.equal(clicks[0].download, "session.json");
+        assert.equal(clicks[0].rel, "noopener");
+        assert.match(clicks[0].href, /^blob:/);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(removed, 1);
+        assert.deepEqual(revoked, [clicks[0].href]);
+    } finally {
+        URL.revokeObjectURL = originalRevoke;
+    }
+});
+
+test("downloadText reports failure instead of throwing when the DOM is unavailable", async () => {
+    installBrowser();
+    globalThis.document.createElement = () => { throw new Error("no DOM"); };
+    const bridge = await loadBridge();
+
+    assert.equal(bridge.downloadText("x.txt", "content"), false);
+});
+
 test("detach drops pending calls and bridge callbacks are not traced", async () => {
     installBrowser();
     const bridge = await loadBridge();

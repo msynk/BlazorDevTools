@@ -24,7 +24,8 @@ public sealed record ComponentSnapshot(
     DateTimeOffset? LastRenderAt,
     bool IsDisposed,
     int ErrorCount,
-    bool IsFrameworkInternal = false)
+    bool IsFrameworkInternal = false,
+    int ParentRendersWithUnchangedParameters = 0)
 {
     public double AverageRenderMs => RenderCount == 0 ? 0 : TotalRenderMs / RenderCount;
 }

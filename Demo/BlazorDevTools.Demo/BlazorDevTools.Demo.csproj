@@ -1,9 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
@@ -11,7 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\BlazorDevTools.Demo.Client\BlazorDevTools.Demo.Client.csproj" />
     <ProjectReference Include="..\..\src\BlazorDevTools.Server\BlazorDevTools.Server.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" />
   </ItemGroup>
 
 </Project>

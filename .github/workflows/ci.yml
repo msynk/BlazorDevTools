@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build-and-test:
+    name: Build, test (.NET + browser bridge), pack
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Restore
+        run: dotnet restore BlazorDevTools.slnx
+
+      - name: Build (warnings are errors)
+        run: dotnet build BlazorDevTools.slnx -c Release --no-restore
+
+      - name: Test (.NET)
+        run: dotnet test BlazorDevTools.slnx -c Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory artifacts/test-results
+
+      - name: Test (browser bridge)
+        run: npm test --prefix tests/BlazorDevTools.BrowserTests
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: artifacts/test-results
+
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          dotnet pack src/BlazorDevTools.Abstractions/BlazorDevTools.Abstractions.csproj -c Release --no-build -o artifacts/packages
+          dotnet pack src/BlazorDevTools/BlazorDevTools.csproj -c Release --no-build -o artifacts/packages
+          dotnet pack src/BlazorDevTools.Server/BlazorDevTools.Server.csproj -c Release --no-build -o artifacts/packages
+
+      - name: Upload packages
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: artifacts/packages/*.nupkg
+
+  benchmark-smoke:
+    name: Benchmark harness runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      # A smoke run only: numbers from shared CI runners are noise, but the harness must keep compiling and finishing.
+      - name: Run benchmark harness
+        run: dotnet run -c Release --project tests/BlazorDevTools.Benchmarks
+        timeout-minutes: 15

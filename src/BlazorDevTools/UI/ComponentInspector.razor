@@ -53,19 +53,32 @@
         }
     </InspectorSection>
     <InspectorSection Title="@($"State ({_state.Count} fields)")">
-        @if (Record.LastRender?.ChangedState is { Count: > 0 } changed)
+        @if (Record.LastRender is { } lastRender)
         {
-            <div class="bdt-chip bdt-warn" style="margin-bottom:4px">changed before last render:</div>
-            <ul class="bdt-mono" style="margin:0 0 6px 16px; padding:0">
-                @foreach (var c in changed)
-                {
-                    <li>@c</li>
-                }
-            </ul>
-        }
-        else if (Record.RenderCount > 1)
-        {
-            <div class="bdt-muted" style="margin-bottom:4px">No field changed before the last render (or capture started after it).</div>
+            var changedState = lastRender.ChangedState ?? [];
+            var changedParameters = lastRender.ChangedParameters ?? [];
+            if (changedState.Count > 0 || changedParameters.Count > 0)
+            {
+                <div class="bdt-chip bdt-warn" style="margin-bottom:4px">changed before last render:</div>
+                <ul class="bdt-mono bdt-changes">
+                    @foreach (var c in changedState)
+                    {
+                        <li title="component field">@c</li>
+                    }
+                    @foreach (var c in changedParameters)
+                    {
+                        <li title="parameter"><span class="bdt-chip">param</span> @c</li>
+                    }
+                </ul>
+            }
+            else if (lastRender.IsWastedRender)
+            {
+                <div class="bdt-chip bdt-warn" style="margin-bottom:4px" title="@WastedRenderTooltip">forced re-render: no field and no observable parameter changed</div>
+            }
+            else if (Record.RenderCount > 1)
+            {
+                <div class="bdt-muted" style="margin-bottom:4px">@(lastRender.ParametersCompared ? "No field or parameter changed before the last render." : "No field changed before the last render (or capture started after it).")</div>
+            }
         }
         @if (_state.Count == 0)
         {
@@ -108,6 +121,26 @@
             {
                 <dt>SetParametersAsync</dt><dd>@_typeMetrics.ParameterUpdates calls, @Fmt.Ms(_typeMetrics.ParameterUpdateMs) total, max @Fmt.Ms(_typeMetrics.MaxParameterUpdateMs) <span class="bdt-muted">(per type, from framework metrics)</span></dd>
             }
+            @if (Record.BaselineAt is { } baseline)
+            {
+                <dt>Since baseline</dt><dd>@Record.RendersSinceBaseline renders, @Fmt.Ms(Record.RenderMsSinceBaseline), max @Fmt.Ms(Record.MaxRenderMsSinceBaseline) <span class="bdt-muted">(baseline set @Fmt.Ago(baseline))</span></dd>
+            }
+            @if (_comparedRenders > 0)
+            {
+                <dt>Forced re-renders</dt>
+                <dd title="@WastedRenderTooltip">
+                    @if (Record.ParentRendersWithUnchangedParameters > 0)
+                    {
+                        <span class="bdt-chip bdt-warn">@Record.ParentRendersWithUnchangedParameters</span>
+                        <span> of @_comparedRenders compared renders were forced by the parent with parameters identical to the previous render. Override <code>ShouldRender</code>, or stop the parent recreating equivalent values.</span>
+                    }
+                    else
+                    {
+                        <span class="bdt-chip bdt-ok">0</span>
+                        <span> of @_comparedRenders compared renders re-applied identical parameters.</span>
+                    }
+                </dd>
+            }
         </dl>
         @if (_causes.Count > 0)
         {
@@ -140,7 +173,17 @@
                             }
                         </td>
                         <td class="bdt-num">@Fmt.Ms(r.DurationMs)</td>
-                        <td class="bdt-truncate" style="max-width:320px" title="@r.CauseDetail">@r.CauseDetail</td>
+                        <td class="bdt-truncate" style="max-width:320px" title="@r.CauseDetail">
+                            @if (r.IsWastedRender)
+                            {
+                                <span class="bdt-chip bdt-warn" title="@WastedRenderTooltip">forced</span>
+                            }
+                            else if (r.ChangedParameters is { Count: > 0 } changedParams)
+                            {
+                                <span class="bdt-chip bdt-ok" title="@string.Join("\n", changedParams)">@changedParams.Count param@(changedParams.Count == 1 ? "" : "s")</span>
+                            }
+                            @r.CauseDetail
+                        </td>
                         <td class="bdt-num">#@r.BatchId</td>
                     </tr>
                 }
@@ -192,6 +235,12 @@
     private RenderSample[] _renders = [];
     private LifecycleTypeMetrics? _typeMetrics;
     private string _baseName = "";
+    private int _comparedRenders;
+
+    private const string WastedRenderTooltip = "The parent re-rendered and re-applied this component's parameters, but every observable parameter value "
+        + "(display value plus one level of members and up to 25 collection items) was identical to the previous render. Delegates and render fragments "
+        + "compare by target method, so a recreated lambda with the same body counts as unchanged. Blazor only skips such renders for primitive-typed "
+        + "parameters; ShouldRender can skip the rest.";
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, (PropertyInfo[] Parameters, PropertyInfo[] Cascading, PropertyInfo[] Injected)> PropertyCache = new();
 
     protected override void OnParametersSet()
@@ -221,6 +270,7 @@
 
         var renders = Record.Renders;
         _renders = renders.Reverse().Take(50).ToArray();
+        _comparedRenders = renders.Count(r => r.ParametersCompared);
         _causes = renders.GroupBy(r => r.Cause).Select(g => new CauseRow(g.Key.ToString(), g.Count(), string.Join(" · ", g.Select(r => r.CauseDetail).Where(d => d is not null).Distinct().Take(3)))).OrderByDescending(c => c.Count).ToList();
         _children = Session.Components.All.Where(c => !c.IsDisposed && !c.IsHidden && c.Parent is not null && NearestVisibleAncestor(c) == Record).OrderBy(c => c.ComponentId).ToList();
         _errors = Session.Errors.Snapshot().Where(e => e.ComponentInstanceId == Record.InstanceId).Reverse().ToList();

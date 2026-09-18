@@ -316,6 +316,26 @@ internal sealed class ComponentRegistry
         }
     }
 
+    /// <summary>When the profiler baseline was last reset for this session, or null when it never was.</summary>
+    public DateTimeOffset? BaselineAt { get; private set; }
+
+    /// <summary>
+    /// Starts a new profiling window for every tracked component: "since baseline" render figures restart from zero
+    /// while the raw counters keep running. The typical workflow is reset → perform one interaction → read what
+    /// rendered, which is impossible when the numbers include everything since page load.
+    /// </summary>
+    public void MarkBaseline()
+    {
+        var now = DateTimeOffset.UtcNow;
+        BaselineAt = now;
+        foreach (var record in _byId.Values)
+        {
+            record.MarkBaseline(now);
+        }
+
+        _session.Touch();
+    }
+
     /// <summary>Drops the history of components that are already gone. Live components keep their statistics.</summary>
     public void ClearDisposed()
     {

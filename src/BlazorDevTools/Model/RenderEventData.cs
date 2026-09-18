@@ -14,9 +14,7 @@ namespace BlazorDevTools.Model;
 /// </summary>
 internal sealed class RenderEventData(RenderSample sample, int renderCount) : IReadOnlyDictionary<string, object?>
 {
-    private static readonly string[] Keys = ["cause", "batch", "renderCount", "changedState"];
-
-    public IEnumerable<string> Keys2 => Keys;
+    private static readonly string[] Keys = ["cause", "batch", "renderCount", "changedState", "changedParameters", "parametersUnchanged"];
 
     IEnumerable<string> IReadOnlyDictionary<string, object?>.Keys => Keys;
 
@@ -52,6 +50,13 @@ internal sealed class RenderEventData(RenderSample sample, int renderCount) : IR
                 return true;
             case "changedState":
                 value = sample.ChangedState;
+                return true;
+            case "changedParameters":
+                value = sample.ChangedParameters;
+                return true;
+            case "parametersUnchanged":
+                // null: not compared; true: compared and identical (a forced re-render); false: compared and different.
+                value = sample.ChangedParameters is { } compared ? compared.Count == 0 : null;
                 return true;
             default:
                 value = null;

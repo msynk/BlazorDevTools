@@ -44,6 +44,9 @@ Press **Ctrl+Shift+D** or click the badge to open it; **Ctrl+K** opens search an
 |---|---|
 | Which components exist, with what parameters, cascading values, state and services? | Components |
 | Why did this component render, and how many times / how long? | Components → Rendering, Profiler |
+| Did it *need* to render, or did the parent re-apply identical parameters? | Components → Rendering (*forced re-renders*), Diagnostics |
+| What did this one click cost, across every component? | Profiler → *Reset*, click, read *since reset* |
+| What do all 500 rows of my list cost together? | Profiler → *by type* |
 | What happened when I clicked, and what did it cause (renders, HTTP, JS, state)? | Timeline (select an event: *caused by* / *caused*) |
 | What changed in my state container and which click did it? | State (history with before/after diffs) |
 | Which HTTP requests ran, how long, which failed, what triggered them? | Network |
@@ -52,9 +55,13 @@ Press **Ctrl+Shift+D** or click the badge to open it; **Ctrl+K** opens search an
 | What is registered in DI, with which lifetimes, dependencies and mistakes? | Services |
 | Is my circuit blocked, reconnecting, dying? | Circuit (Server), Browser |
 | What is DevTools itself costing me? | About → overhead |
+| How do I share what I found? | About → *Export session (JSON)* / *Copy report (Markdown)*, or `>export` in the palette |
 
 Diagnostics rules turn symptoms into causes with evidence, e.g. *"ProductList rendered 87 times in 2 s: 81 × parent
 re-render (Products), 6 × UI event (oninput → FilterBar.OnQuery). Consider ShouldRender…"*.
+
+**Pause** (header button or `>pause`) freezes every buffer so what you are reading is not evicted by a busy
+application; errors are still collected, and the resume marker says how many renders were skipped meanwhile.
 
 ## Honest capability model
 
@@ -88,7 +95,8 @@ Development-only by default. Member, header, query and storage names matching se
 `authorization`, `cookie`, `connectionstring`, …) are redacted; `[DevToolsSensitive]` redacts explicitly;
 `[DevToolsIgnore]` hides members or whole components. Request/response bodies and DI instance values are never read.
 Circuit ids are truncated. Nothing is sent anywhere: all data stays in the session's memory and is bounded by ring
-buffers (`MaxEvents`, `MaxRendersPerComponent`, …).
+buffers (`MaxEvents`, `MaxRendersPerComponent`, …). Exports contain exactly what the panels show, with the same
+redaction, and omit browser storage previews.
 
 ## Extending
 
@@ -109,23 +117,30 @@ services.AddBlazorDevTools(o => o.Extensions.Add(new MyLibraryDevTools()));
 ```
 
 Application code can also emit timeline events through `IDevToolsTimeline`, expose state with `IStateProvider`
-(or `services.AddDevToolsStateProvider<T>()`), and attribute background work with `session.UseAmbient()`.
+(or `services.AddDevToolsStateProvider<T>()`), attribute background work with `session.UseAmbient()`, pause and
+resume capture (`session.PauseCapture()` / `ResumeCapture()`) and export everything with `SessionExporter`.
+Commands get `CopyTextAsync` / `DownloadTextAsync` on their context to hand text to the browser.
 The `BlazorDevTools.Server` package is itself an extension (Circuit panel, circuit rules, command).
 
 ## Repository layout
 
 ```
 src/BlazorDevTools.Abstractions   public integration API (events, state providers, rules, commands, panels, capabilities)
-src/BlazorDevTools                instrumentation, session stores, diagnostics, inspection, DevTools UI (Razor class library)
+src/BlazorDevTools                instrumentation, session stores, diagnostics, inspection, export, DevTools UI (Razor class library)
 src/BlazorDevTools.Server         circuit handler, circuit registry, Circuit panel (reference extension)
 Demo/BlazorDevTools.Demo          Blazor Web App (Interactive Auto) with a "Problems to diagnose" index
 tests/BlazorDevTools.Tests        xunit + bUnit: instrumentation, tree, rendering, timeline, state, network, interop,
                                   diagnostics, DI graph, concurrency, overhead, memory bounds, scale, panel interaction,
-                                  framework-diagnostics attribution, extensibility
-tests/BlazorDevTools.BrowserTests dependency-free Node tests for browser-bridge isolation and pre-.NET redaction
+                                  framework-diagnostics attribution, extensibility, forced-render detection, capture
+                                  control, profiler baseline/grouping, export
+tests/BlazorDevTools.BrowserTests dependency-free Node tests for browser-bridge isolation, pre-.NET redaction, download
 tests/BlazorDevTools.Benchmarks   reproducible overhead measurement (dotnet run -c Release)
 docs/                             capability matrix, architecture, performance
+.github/workflows/ci.yml          build (warnings as errors), both test suites on Linux and Windows, pack, benchmark smoke
 ```
+
+Package versions are managed centrally in `Directory.Packages.props`; shared build settings live in
+`Directory.Build.props`. See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
 
 Run the demo: `dotnet run --project Demo/BlazorDevTools.Demo`, then open `/problems`.
 Run the complete test gate (.NET and browser bridge): `npm test`.

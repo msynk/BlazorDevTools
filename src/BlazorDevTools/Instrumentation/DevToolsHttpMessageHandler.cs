@@ -50,7 +50,7 @@ public sealed class DevToolsHttpMessageHandler : DelegatingHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var session = _explicitSession ?? SessionResolver.Resolve();
-        if (session is null || !session.IsEnabled)
+        if (session is null || !session.IsEnabled || !session.IsCapturing)
         {
             return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
