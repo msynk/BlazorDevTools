@@ -48,18 +48,12 @@ internal static class BuiltInCommands
             ctx.ShowPanel("profiler");
             ctx.Notify("Profiler baseline reset: counts now show renders since this moment");
         }, keywords: ["counters", "zero", "restart", "mark", "since"]),
-        new DelegateCommand("session.export", "Export session as JSON", "DevTools", async (ctx, _) =>
-        {
-            var session = ctx.Services.GetRequiredService<DevToolsSession>();
-            var json = Export.SessionExporter.ToJson(session);
-            var name = $"blazor-devtools-session-{session.Id}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.json";
-            ctx.Notify(await ctx.DownloadTextAsync(name, json, "application/json") ? "Export downloaded: " + name : "Export unavailable: the browser bridge is not attached");
-        }, keywords: ["download", "save", "share", "dump", "file"]),
-        new DelegateCommand("session.report", "Copy diagnostics report", "DevTools", async (ctx, _) =>
-        {
-            var session = ctx.Services.GetRequiredService<DevToolsSession>();
-            ctx.Notify(await ctx.CopyTextAsync(Export.SessionExporter.ToMarkdownReport(session)) ? "Report copied as Markdown" : "Clipboard unavailable");
-        }, keywords: ["markdown", "summary", "clipboard", "issue", "share"]),
+        new DelegateCommand("session.export", "Export session as JSON", "DevTools",
+            (ctx, _) => Export.SessionExporter.DownloadJsonAsync(ctx.Services.GetRequiredService<DevToolsSession>(), ctx),
+            keywords: ["download", "save", "share", "dump", "file"]),
+        new DelegateCommand("session.report", "Copy diagnostics report", "DevTools",
+            (ctx, _) => Export.SessionExporter.CopyMarkdownReportAsync(ctx.Services.GetRequiredService<DevToolsSession>(), ctx),
+            keywords: ["markdown", "summary", "clipboard", "issue", "share"]),
         new DelegateCommand("timeline.clear", "Clear timeline", "Timeline", (ctx, _) =>
         {
             ctx.Services.GetRequiredService<DevToolsSession>().Timeline.Clear();

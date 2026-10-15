@@ -171,12 +171,13 @@
                 {
                     var renders = g.Sum(c => c.Renders);
                     var total = g.Sum(c => c.Ms);
-                    // Which rule explained the renders of this type, most common first: "412 parent · 9 event".
-                    var causes = g.SelectMany(c => c.Record.Renders)
-                        .Where(r => !since || r.At >= _baselineAt)
-                        .GroupBy(r => r.Cause)
-                        .OrderByDescending(x => x.Count())
-                        .Select(x => x.Count() + " " + CauseLabel(x.Key));
+                    // Which rule explained the renders of this type, most common first: "412 parent · 9 event". Read from
+                    // per-instance counters, so the breakdown adds up to the Renders column and no sample is copied.
+                    var causes = Causes
+                        .Select(cause => (Cause: cause, Count: g.Sum(c => c.Record.RendersByCause(cause, since))))
+                        .Where(x => x.Count > 0)
+                        .OrderByDescending(x => x.Count)
+                        .Select(x => x.Count + " " + CauseLabel(x.Cause));
                     return new Row(null, g.First().Record.DisplayName, g.Key, g.Count(), renders, total, renders == 0 ? 0 : total / renders, g.Max(c => c.Max), 0, string.Join(" · ", causes), g.All(c => c.Record.IsDisposed));
                 });
         }
@@ -200,6 +201,8 @@
         _batches = Session.Timeline.Snapshot().Where(e => e.Kind == DevToolsEventKind.RenderBatch).Reverse().Take(25).ToArray();
         _typeMetrics = Session.TypeMetrics.Values.OrderByDescending(m => m.ParameterUpdateMs + m.EventHandlerMs).Take(30).ToArray();
     }
+
+    private static readonly RenderCause[] Causes = Enum.GetValues<RenderCause>();
 
     private static string CauseLabel(RenderCause cause) => cause switch
     {

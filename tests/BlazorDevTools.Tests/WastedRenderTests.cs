@@ -1,5 +1,6 @@
 using BlazorDevTools.Diagnostics;
 using BlazorDevTools.Events;
+using BlazorDevTools.Export;
 using BlazorDevTools.Model;
 using BlazorDevTools.Session;
 using Bunit;
@@ -122,6 +123,135 @@ public class WastedRenderTests : BunitContext
         var finding = Assert.Single(session.Diagnostics.Findings, f => f.Diagnostic.RuleId == "render.parent-driven" && f.Diagnostic.Title.StartsWith("ListChild", StringComparison.Ordinal));
         Assert.Equal(DiagnosticSeverity.Info, finding.Diagnostic.Severity);
         Assert.Contains("Select the component in the inspector", finding.Diagnostic.Evidence, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <c>&lt;Child&gt;@count&lt;/Child&gt;</c>: every fragment displays as "RenderFragment", so comparing displays
+    /// called new content identical, counted the render as forced and escalated the rule to a warning whose
+    /// ShouldRender advice would freeze the count on screen.
+    /// </summary>
+    [Fact]
+    public void New_child_content_is_a_changed_parameter_and_keeps_the_rule_informational()
+    {
+        var cut = Render<ContentParent>();
+        for (var i = 0; i < 12; i++)
+        {
+            cut.InvokeAsync(() => cut.Instance.Bump());
+        }
+
+        var child = Session.Components.All.Single(r => r.Type == typeof(ContentChild));
+        var last = child.LastRender!;
+        Assert.Equal(RenderCause.ParentRender, last.Cause);
+        Assert.False(last.IsWastedRender);
+        Assert.Equal("ChildContent: new RenderFragment instance (its output cannot be compared)", Assert.Single(last.ChangedParameters!));
+        Assert.Equal(0, child.ParentRendersWithUnchangedParameters);
+        Assert.Equal(12, child.RendersWithComparedParameters);
+        Assert.Equal("12", cut.Markup.Trim());
+
+        Session.Diagnostics.Evaluate(force: true);
+        var finding = Assert.Single(Session.Diagnostics.Findings, f => f.Diagnostic.RuleId == "render.parent-driven" && f.Diagnostic.Title.StartsWith("ContentChild", StringComparison.Ordinal));
+        Assert.Equal(DiagnosticSeverity.Info, finding.Diagnostic.Severity);
+        Assert.Contains("0 of 12 compared renders received identical parameter values", finding.Diagnostic.Evidence, StringComparison.Ordinal);
+    }
+
+    /// <summary>Non-capturing child content compiles to one cached delegate: the same instance renders the same output.</summary>
+    [Fact]
+    public void Static_child_content_is_the_same_instance_and_can_be_a_forced_render()
+    {
+        var cut = Render<ContentParent>(ps => ps.Add(p => p.Mode, "static"));
+        cut.InvokeAsync(() => cut.Instance.Bump());
+        cut.InvokeAsync(() => cut.Instance.Bump());
+
+        var child = Session.Components.All.Single(r => r.Type == typeof(ContentChild));
+        Assert.True(child.LastRender!.IsWastedRender);
+        Assert.Equal(2, child.ParentRendersWithUnchangedParameters);
+    }
+
+    /// <summary>A fragment cached in a field is the same instance every time, yet renders the owner's current state.</summary>
+    [Fact]
+    public void A_cached_fragment_that_reads_component_state_is_never_judged_unchanged()
+    {
+        var cut = Render<ContentParent>(ps => ps.Add(p => p.Mode, "cached"));
+        cut.InvokeAsync(() => cut.Instance.Bump());
+        cut.InvokeAsync(() => cut.Instance.Bump());
+
+        var child = Session.Components.All.Single(r => r.Type == typeof(ContentChild));
+        var last = child.LastRender!;
+        Assert.False(last.IsWastedRender);
+        Assert.Equal("ChildContent: RenderFragment reads component state when it runs (its output cannot be compared)", Assert.Single(last.ChangedParameters!));
+        Assert.Equal(0, child.ParentRendersWithUnchangedParameters);
+        Assert.Equal("2", cut.Markup.Trim());
+    }
+
+    /// <summary>
+    /// The forced count used to be shown as a fraction of the samples still in the ring buffer, so it could read
+    /// "250 of 100 compared renders". Both sides are now session-long counters, as is the per-cause breakdown.
+    /// </summary>
+    [Fact]
+    public void Forced_compared_and_per_cause_counts_are_not_capped_by_the_sample_ring()
+    {
+        using var context = new BunitContext();
+        context.Services.AddBlazorDevTools(o =>
+        {
+            o.Enabled = true;
+            o.CaptureComponentStateOnRender = true;
+            o.MaxRendersPerComponent = 5;
+        });
+        var cut = context.Render<ListParent>();
+        for (var i = 0; i < 12; i++)
+        {
+            cut.InvokeAsync(() => cut.Instance.Bump());
+        }
+
+        var session = context.Services.GetRequiredService<DevToolsSession>();
+        var child = session.Components.All.Single(r => r.Type == typeof(ListChild));
+        Assert.Equal(5, child.Renders.Length);
+        Assert.Equal(13, child.RenderCount);
+        Assert.Equal(12, child.RendersWithComparedParameters);
+        Assert.Equal(12, child.ParentRendersWithUnchangedParameters);
+        Assert.Equal(12, child.RendersByCause(RenderCause.ParentRender));
+        Assert.Equal(1, child.RendersByCause(RenderCause.Initial));
+        Assert.Contains("| 12 of 12 compared |", SessionExporter.ToMarkdownReport(session), StringComparison.Ordinal);
+
+        session.Components.MarkBaseline();
+        cut.InvokeAsync(() => cut.Instance.Bump());
+        Assert.Equal(1, child.RendersByCause(RenderCause.ParentRender, sinceBaseline: true));
+        Assert.Equal(0, child.RendersByCause(RenderCause.Initial, sinceBaseline: true));
+    }
+
+    /// <summary>Passes child content in three shapes: rebuilt per render, static, or cached in a field.</summary>
+    public sealed class ContentParent : ComponentBase
+    {
+        private RenderFragment? _cached;
+        private int _count;
+
+        [Parameter] public string Mode { get; set; } = "rebuilt";
+
+        public void Bump()
+        {
+            _count++;
+            StateHasChanged();
+        }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            RenderFragment content = Mode switch
+            {
+                "static" => b => b.AddContent(0, "static"),
+                "cached" => _cached ??= b => b.AddContent(0, _count),
+                _ => b => b.AddContent(0, _count),
+            };
+            builder.OpenComponent<ContentChild>(0);
+            builder.AddComponentParameter(1, nameof(ContentChild.ChildContent), content);
+            builder.CloseComponent();
+        }
+    }
+
+    public sealed class ContentChild : ComponentBase
+    {
+        [Parameter] public RenderFragment? ChildContent { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder) => builder.AddContent(0, ChildContent);
     }
 
     /// <summary>Recreates the list on every render, which is exactly what forces <see cref="ListChild"/> to re-render.</summary>

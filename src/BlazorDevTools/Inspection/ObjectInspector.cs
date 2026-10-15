@@ -500,22 +500,31 @@ public sealed class ObjectInspector
     public Dictionary<string, string> Flatten(object? root, int maxDepth = 3, int maxItems = 25, int maxEntries = 400)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        var ancestors = new List<object>();
-        var deadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * FlattenBudgetSeconds);
-        FlattenInto(result, "", root, 0, maxDepth, maxItems, maxEntries, ancestors, null, deadline);
+        FlattenInto(result, "", root, 0, maxDepth, maxItems, maxEntries, [], null, FlattenDeadline());
         return result;
     }
 
-    /// <summary>Wall-clock budget for one Flatten pass. Application getters can be arbitrarily slow; inspection must not be.</summary>
+    /// <summary>
+    /// Adds one named value to <paramref name="result"/>: its display under <paramref name="name"/> and its members
+    /// below it ("name.Member", "name[0]"). The value's own entry is always written; the budget only stops the walk
+    /// below it. <paramref name="maxEntries"/> counts the whole dictionary and <paramref name="deadline"/> comes from
+    /// the caller, so a loop over several values (a component's parameters) shares one bounded budget.
+    /// </summary>
+    internal void FlattenNamed(Dictionary<string, string> result, string name, object? value, MemberInfo? member, int maxDepth, int maxItems, int maxEntries, long deadline) =>
+        FlattenInto(result, name, value, 0, maxDepth, maxItems, maxEntries, [], member, deadline);
+
+    /// <summary>The deadline for one Flatten pass started now. Application getters can be arbitrarily slow; inspection must not be.</summary>
+    internal static long FlattenDeadline() => Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * FlattenBudgetSeconds);
+
     private const double FlattenBudgetSeconds = 0.05;
+
+    private static bool OutOfBudget(Dictionary<string, string> result, int maxEntries, long deadline) =>
+        result.Count >= maxEntries || Stopwatch.GetTimestamp() > deadline;
 
     private void FlattenInto(Dictionary<string, string> result, string path, object? value, int depth, int maxDepth, int maxItems, int maxEntries, List<object> ancestors, MemberInfo? member, long deadline)
     {
-        if (result.Count >= maxEntries || Stopwatch.GetTimestamp() > deadline)
-        {
-            return;
-        }
-
+        // The budget is checked before each child, not here: the node itself is always written, and a getter is never
+        // invoked once the budget is spent.
         var node = Describe(member?.Name ?? path, value, path, member, ancestors);
         if (path.Length > 0)
         {
@@ -535,7 +544,7 @@ public sealed class ObjectInspector
                 var i = 0;
                 foreach (DictionaryEntry entry in dictionary)
                 {
-                    if (i++ >= maxItems)
+                    if (i++ >= maxItems || OutOfBudget(result, maxEntries, deadline))
                     {
                         break;
                     }
@@ -551,7 +560,7 @@ public sealed class ObjectInspector
                 var i = 0;
                 foreach (var item in collection)
                 {
-                    if (i >= maxItems)
+                    if (i >= maxItems || OutOfBudget(result, maxEntries, deadline))
                     {
                         break;
                     }
@@ -564,6 +573,11 @@ public sealed class ObjectInspector
             {
                 foreach (var m in GetMembers(value.GetType()))
                 {
+                    if (OutOfBudget(result, maxEntries, deadline))
+                    {
+                        break;
+                    }
+
                     var childPath = path.Length == 0 ? m.Name : path + "." + m.Name;
                     object? child;
                     try

@@ -77,6 +77,30 @@ public static class SessionExporter
     /// A short human-readable summary (Markdown) for bug reports and chat: findings, errors, the hottest components,
     /// failed or slow requests and the tail of the timeline.
     /// </summary>
+    /// <summary>
+    /// Offers <see cref="ToJson"/> as a file download and reports the outcome. The one implementation behind the About
+    /// panel button and the <c>session.export</c> command, so the file name and the messages cannot drift apart.
+    /// </summary>
+    internal static async Task DownloadJsonAsync(DevToolsSession session, Commands.IDevToolsCommandContext context)
+    {
+        var name = $"blazor-devtools-session-{session.Id}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.json";
+        var downloaded = await context.DownloadTextAsync(name, ToJson(session), "application/json");
+        context.Notify(downloaded ? "Export downloaded: " + name : "Export unavailable: the browser bridge is not attached");
+    }
+
+    /// <summary>Copies <see cref="ToMarkdownReport"/> to the clipboard and reports the outcome (About panel and <c>session.report</c>).</summary>
+    internal static async Task CopyMarkdownReportAsync(DevToolsSession session, Commands.IDevToolsCommandContext context)
+    {
+        var copied = await context.CopyTextAsync(ToMarkdownReport(session));
+        context.Notify(copied ? "Report copied as Markdown" : "Clipboard unavailable");
+    }
+
+    /// <summary>"3 of 40 compared": a forced-render count only means something next to how many renders were compared.</summary>
+    private static string ForcedRenders(ComponentRecord component) => component.RendersWithComparedParameters == 0
+        ? "–"
+        : component.ParentRendersWithUnchangedParameters.ToString(CultureInfo.InvariantCulture) + " of "
+            + component.RendersWithComparedParameters.ToString(CultureInfo.InvariantCulture) + " compared";
+
     public static string ToMarkdownReport(DevToolsSession session, int timelineTail = 40)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -168,7 +192,7 @@ public static class SessionExporter
                     .Append(" | ").Append(Ms(c.TotalRenderMs))
                     .Append(" | ").Append(Ms(c.TotalRenderMs / c.RenderCount))
                     .Append(" | ").Append(Ms(c.MaxRenderMs))
-                    .Append(" | ").Append(c.ParentRendersWithUnchangedParameters > 0 ? c.ParentRendersWithUnchangedParameters.ToString(CultureInfo.InvariantCulture) : "–")
+                    .Append(" | ").Append(ForcedRenders(c))
                     .Append(" | ").Append(c.LastRender?.CauseDetail ?? "")
                     .AppendLine(" |");
             }
@@ -383,6 +407,7 @@ public static class SessionExporter
 
             w.WriteNumber("errors", c.ErrorCount);
             w.WriteNumber("parentRendersWithUnchangedParameters", c.ParentRendersWithUnchangedParameters);
+            w.WriteNumber("rendersWithComparedParameters", c.RendersWithComparedParameters);
             if (c.SkippedRenders > 0)
             {
                 w.WriteNumber("rendersWhilePaused", c.SkippedRenders);

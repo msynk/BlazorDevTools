@@ -67,11 +67,15 @@ public sealed class RenderSample
 /// <summary>Live bookkeeping for one component instance. Mutated only on the renderer's dispatcher; read from anywhere.</summary>
 public sealed class ComponentRecord
 {
+    private static readonly int CauseCount = Enum.GetValues<RenderCause>().Length;
     private readonly RingBuffer<RenderSample> _renders;
     private readonly WeakReference<IComponent> _component;
+    private readonly int[] _rendersByCause = new int[CauseCount];
+    private readonly int[] _baselineRendersByCause = new int[CauseCount];
     private int _renderCount;
     private int _errorCount;
     private int _wastedRenders;
+    private int _comparedRenders;
     private int _baselineRenderCount;
     private double _baselineTotalMs;
     private double _maxRenderMsSinceBaseline;
@@ -161,6 +165,30 @@ public sealed class ComponentRecord
     /// </summary>
     public int ParentRendersWithUnchangedParameters => Volatile.Read(ref _wastedRenders);
 
+    /// <summary>
+    /// Recorded renders whose parameters were compared with the previous render (<see cref="RenderSample.ParametersCompared"/>):
+    /// the denominator for <see cref="ParentRendersWithUnchangedParameters"/>. Both are session-long counters, unlike
+    /// <see cref="Renders"/>, which keeps only the most recent samples.
+    /// </summary>
+    public int RendersWithComparedParameters => Volatile.Read(ref _comparedRenders);
+
+    /// <summary>
+    /// Recorded renders attributed to <paramref name="cause"/>, over the whole session or since <see cref="MarkBaseline"/>.
+    /// Counted as renders happen, so the breakdown always adds up to <see cref="RenderCount"/> (or
+    /// <see cref="RendersSinceBaseline"/>), however many samples <see cref="Renders"/> still holds.
+    /// </summary>
+    public int RendersByCause(RenderCause cause, bool sinceBaseline = false)
+    {
+        var index = (int)cause;
+        if ((uint)index >= (uint)CauseCount)
+        {
+            return 0;
+        }
+
+        var total = Volatile.Read(ref _rendersByCause[index]);
+        return sinceBaseline ? total - Volatile.Read(ref _baselineRendersByCause[index]) : total;
+    }
+
     /// <summary>When the profiler baseline was last reset, or null when statistics cover the whole session.</summary>
     public DateTimeOffset? BaselineAt { get; private set; }
 
@@ -178,6 +206,11 @@ public sealed class ComponentRecord
     internal void MarkBaseline(DateTimeOffset at)
     {
         Volatile.Write(ref _baselineRenderCount, RenderCount);
+        for (var i = 0; i < CauseCount; i++)
+        {
+            Volatile.Write(ref _baselineRendersByCause[i], Volatile.Read(ref _rendersByCause[i]));
+        }
+
         _baselineTotalMs = TotalRenderMs;
         _maxRenderMsSinceBaseline = 0;
         BaselineAt = at;
@@ -243,6 +276,16 @@ public sealed class ComponentRecord
         if (sample.DurationMs > _maxRenderMsSinceBaseline)
         {
             _maxRenderMsSinceBaseline = sample.DurationMs;
+        }
+
+        if ((uint)sample.Cause < (uint)CauseCount)
+        {
+            Interlocked.Increment(ref _rendersByCause[(int)sample.Cause]);
+        }
+
+        if (sample.ParametersCompared)
+        {
+            Interlocked.Increment(ref _comparedRenders);
         }
 
         if (sample.IsWastedRender)

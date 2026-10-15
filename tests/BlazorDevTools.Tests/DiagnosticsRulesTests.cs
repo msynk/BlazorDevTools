@@ -145,6 +145,60 @@ public class DiagnosticsRulesTests
         }
     }
 
+    /// <summary>
+    /// The parent-driven rule turns from information into a warning once parameter comparison proves the renders
+    /// wasted. That escalation used to overwrite the finding silently: the timeline kept only the Info row and the
+    /// warning badge changed with no record of when or why.
+    /// </summary>
+    [Fact]
+    public void An_escalation_is_recorded_once_and_brings_a_dismissed_finding_back()
+    {
+        var rule = new AdjustableRule();
+        var (session, scope) = TestHelpers.CreateSession();
+        using (scope)
+        {
+            session.Diagnostics.AddRule(rule);
+            session.Diagnostics.Evaluate(force: true);
+            var finding = Assert.Single(session.Diagnostics.Findings, f => f.Diagnostic.RuleId == rule.Id);
+            var firstRow = finding.TimelineEventId;
+            session.Diagnostics.Dismiss(finding.Diagnostic.EffectiveFingerprint);
+
+            rule.Severity = DiagnosticSeverity.Warning;
+            session.Diagnostics.Evaluate(force: true);
+
+            Assert.False(finding.Dismissed);
+            Assert.Equal(1, session.Diagnostics.ActiveWarningsOrErrors);
+            Assert.NotEqual(firstRow, finding.TimelineEventId);
+            var escalation = session.Timeline.Find(finding.TimelineEventId)!;
+            Assert.Equal(DevToolsSeverity.Warning, escalation.Severity);
+            Assert.Equal("adjustable finding (escalated from Info)", escalation.Title);
+            Assert.True(escalation.TryGetData("escalatedFrom", out var from) && (string?)from == "Info");
+
+            // Flapping between two severities reports nothing new: only a new high is news.
+            rule.Severity = DiagnosticSeverity.Info;
+            session.Diagnostics.Evaluate(force: true);
+            rule.Severity = DiagnosticSeverity.Warning;
+            session.Diagnostics.Evaluate(force: true);
+            Assert.Equal(2, session.Timeline.Snapshot().Count(e => e.Category == "diagnostic:" + rule.Id));
+        }
+    }
+
+    private sealed class AdjustableRule : IDiagnosticRule
+    {
+        public DiagnosticSeverity Severity { get; set; } = DiagnosticSeverity.Info;
+
+        public string Id => "test.adjustable";
+
+        public string Title => "Adjustable";
+
+        public string Description => "";
+
+        public IEnumerable<Diagnostic> Evaluate(IDiagnosticContext context)
+        {
+            yield return new Diagnostic(Id, Severity, "adjustable finding", "evidence", Fingerprint: Id);
+        }
+    }
+
     private sealed class RuleExtension(IDiagnosticRule rule) : Extensions.IDevToolsExtension
     {
         public string Name => "test";

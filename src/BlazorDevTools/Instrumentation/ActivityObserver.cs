@@ -164,6 +164,15 @@ internal static class ActivityObserver
             Data = tags,
         };
         var id = session.Timeline.Record(evt);
+        if (id <= 0)
+        {
+            // Capture is paused. An event that is not in the timeline must not become the trigger that renders, HTTP
+            // requests and errors point at, nor the "last navigation" capability evidence; the activity is skipped
+            // for good, exactly like DevTools' own activities.
+            activity.SetCustomProperty(EventProperty, IgnoredEvent);
+            return null;
+        }
+
         activity.SetCustomProperty(EventProperty, evt);
         activity.SetCustomProperty(SessionProperty, session);
         if (isEvent)
@@ -178,7 +187,7 @@ internal static class ActivityObserver
         return evt;
     }
 
-    /// <summary>Marker stored on activities DevTools deliberately does not record, so they are not adopted later.</summary>
+    /// <summary>Marker stored on activities DevTools does not record (its own UI, or anything started while capture was paused), so they are not adopted later.</summary>
     private static readonly DevToolsEvent IgnoredEvent = new() { Title = "(devtools)" };
 
     /// <summary>

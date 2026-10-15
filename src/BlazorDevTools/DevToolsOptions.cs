@@ -153,8 +153,9 @@ public sealed class DevToolsOptions
     public bool UseFrameworkInstrumentation { get; set; } = true;
 
     /// <summary>
-    /// Snapshot component fields on every render for every component and diff them. Off by default because it costs
-    /// reflection per render; the inspector always does this for the currently selected component only.
+    /// Snapshot component fields and parameters on every render for every component and diff them (state changes and
+    /// forced re-renders everywhere). Off by default because it costs reflection and a bounded parameter walk per
+    /// render; the inspector always does this for the currently selected component only.
     /// </summary>
     public bool CaptureComponentStateOnRender { get; set; }
 

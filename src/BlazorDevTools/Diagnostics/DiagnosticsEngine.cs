@@ -14,7 +14,11 @@ public sealed class DiagnosticRecord
 
     public bool Dismissed { get; set; }
 
+    /// <summary>The timeline row of the finding's latest report (first sighting or escalation); 0 when capture was paused.</summary>
     public long TimelineEventId { get; set; }
+
+    /// <summary>The highest severity this finding has been reported with. Only a rise above it is reported again.</summary>
+    internal DiagnosticSeverity HighestSeverity { get; set; }
 }
 
 internal sealed class DiagnosticContext(DevToolsSession session, IReadOnlyList<ComponentSnapshot> components, DevToolsEvent[] events) : IDiagnosticContext
@@ -173,33 +177,64 @@ internal sealed class DiagnosticsEngine
                 {
                     existing.Diagnostic = diagnostic;
                     existing.LastSeen = now;
+                    if (diagnostic.Severity > existing.HighestSeverity)
+                    {
+                        // A stronger verdict on a known finding is news (the parent-driven rule becomes a warning once
+                        // parameter comparison proves the renders wasted): it gets its own timeline row, and dismissing
+                        // the weaker version does not hide it. Only a new high is reported, so a finding that moves
+                        // back and forth between two severities does not flood the timeline.
+                        var previous = existing.HighestSeverity;
+                        existing.HighestSeverity = diagnostic.Severity;
+                        existing.Dismissed = false;
+                        RecordTimeline(existing, key, escalatedFrom: previous);
+                        changed = true;
+                    }
+
                     continue;
                 }
 
-                var record = new DiagnosticRecord { Diagnostic = diagnostic, FirstSeen = now, LastSeen = now };
+                var record = new DiagnosticRecord { Diagnostic = diagnostic, FirstSeen = now, LastSeen = now, HighestSeverity = diagnostic.Severity };
                 _findings[key] = record;
                 changed = true;
-                record.TimelineEventId = _session.Timeline.Record(new DevToolsEvent
-                {
-                    Kind = DevToolsEventKind.Diagnostic,
-                    Category = "diagnostic:" + diagnostic.RuleId,
-                    Title = diagnostic.Title,
-                    Detail = diagnostic.Evidence,
-                    Severity = diagnostic.Severity switch
-                    {
-                        DiagnosticSeverity.Error => DevToolsSeverity.Error,
-                        DiagnosticSeverity.Warning => DevToolsSeverity.Warning,
-                        _ => DevToolsSeverity.Info,
-                    },
-                    ComponentInstanceId = diagnostic.ComponentInstanceId,
-                    Data = new Dictionary<string, object?> { ["fingerprint"] = key },
-                });
+                RecordTimeline(record, key, escalatedFrom: null);
             }
         }
 
         if (changed)
         {
             _session.Touch();
+        }
+    }
+
+    private void RecordTimeline(DiagnosticRecord record, string fingerprint, DiagnosticSeverity? escalatedFrom)
+    {
+        var diagnostic = record.Diagnostic;
+        var data = new Dictionary<string, object?> { ["fingerprint"] = fingerprint };
+        if (escalatedFrom is { } previous)
+        {
+            data["escalatedFrom"] = previous.ToString();
+        }
+
+        var id = _session.Timeline.Record(new DevToolsEvent
+        {
+            Kind = DevToolsEventKind.Diagnostic,
+            Category = "diagnostic:" + diagnostic.RuleId,
+            Title = escalatedFrom is { } from ? $"{diagnostic.Title} (escalated from {from})" : diagnostic.Title,
+            Detail = diagnostic.Evidence,
+            Severity = diagnostic.Severity switch
+            {
+                DiagnosticSeverity.Error => DevToolsSeverity.Error,
+                DiagnosticSeverity.Warning => DevToolsSeverity.Warning,
+                _ => DevToolsSeverity.Info,
+            },
+            ComponentInstanceId = diagnostic.ComponentInstanceId,
+            Data = data,
+        });
+
+        // Paused: no row was written, so there is nothing to link to.
+        if (id > 0)
+        {
+            record.TimelineEventId = id;
         }
     }
 

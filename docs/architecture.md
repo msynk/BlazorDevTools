@@ -49,22 +49,28 @@ A render sample's cause is decided in this order, and the label says which rule 
 
 A parent-caused render answers *why*; the follow-up is whether the child got anything new. For the component that is
 being inspected (or every component when `CaptureComponentStateOnRender` is on) `RenderTracker` flattens the
-`[Parameter]`, `[CascadingParameter]` and `[SupplyParameterFrom*]` values before each render — display value plus one
-level of members, bounded to 25 collection items — and diffs them against the previous captured render. A parent-caused
-render with no observable difference is a **forced re-render** (`RenderSample.IsWastedRender`): Blazor only skips
-re-rendering when every parameter is a primitive it can compare, so a recreated list, lambda or anonymous object forces
-the child every time. The verdict is deliberately *observable-only*: delegates and render fragments compare by target
-method, redacted parameters compare equal, and the first captured render is never judged. The count is kept per
-instance (`ParentRendersWithUnchangedParameters`), shown in the inspector, exported, and used by the *Renders driven only
-by the parent* rule to escalate from information to warning with the sentence "all N compared renders received values
-identical to the previous render".
+`[Parameter]`, `[CascadingParameter]` and `[SupplyParameterFrom*]` values before each render — display value plus two
+levels of members, bounded to 25 collection items and one wall-clock budget per render — and diffs them against the
+previous captured render. A parent-caused render with no observable difference is a **forced re-render**
+(`RenderSample.IsWastedRender`): Blazor only skips re-rendering when every parameter is a primitive it can compare, so
+a recreated list, lambda or anonymous object forces the child every time. The verdict is deliberately
+*observable-only*: delegates compare by target method, redacted parameters compare equal, and the first captured render
+is never judged. Render fragments are the exception, because their output is not observable without running them: they
+compare by instance, and one whose target is a component (or a closure holding one) reads state as it runs and never
+compares equal, so new child content is never called forced. The count is kept per instance
+(`ParentRendersWithUnchangedParameters`, with `RendersWithComparedParameters` as its denominator; both are session-long
+counters, unlike the bounded sample ring), shown in the inspector, exported, and used by the *Renders driven only by the
+parent* rule to escalate from information to warning with the sentence "all N compared renders received values
+identical to the previous render". The escalation gets its own timeline row.
 
 ### Pausing capture
 
 `DevToolsSession.IsCapturing` gates every capture path — `Timeline.Record`, the render sample, the HTTP handler, the
 JS interop wrapper, state-change notifications, JS→.NET batches — so a paused session's buffers are exactly what the
-developer was reading. Errors are still collected: losing one because the timeline was frozen would be worse than an
-inconsistent row, so they land in the error center with no timeline link. Renders that happen while paused increment a
+developer was reading. Errors are still collected, failed HTTP requests and JS interop calls included: losing one
+because the timeline was frozen would be worse than an inconsistent row, so they land in the error center with no
+timeline link. A UI event or navigation that starts while paused is never adopted as a trigger, so nothing points at an
+event that is not in the timeline. Renders that happen while paused increment a
 *skipped* counter on the record; cause detection uses "has rendered" rather than "has a recorded render", so the first
 render after resuming is not mislabeled as the initial one. The pause marker is the only event written while paused.
 

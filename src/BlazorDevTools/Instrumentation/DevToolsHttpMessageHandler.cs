@@ -50,12 +50,36 @@ public sealed class DevToolsHttpMessageHandler : DelegatingHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var session = _explicitSession ?? SessionResolver.Resolve();
-        if (session is null || !session.IsEnabled || !session.IsCapturing)
+        if (session is null || !session.IsEnabled)
         {
             return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
         var trigger = ActivityObserver.CurrentTriggerEvent(session);
+        if (!session.IsCapturing)
+        {
+            // Paused: the network log and the timeline stay frozen, but a failed request still reaches the error
+            // list, which pausing promises to keep collecting. Nothing is read from the request unless it failed.
+            HttpResponseMessage pausedResponse;
+            try
+            {
+                pausedResponse = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                RecordException(session, ex, trigger?.Id);
+                throw;
+            }
+
+            var status = (int)pausedResponse.StatusCode;
+            if (status >= 400)
+            {
+                RecordStatusError(session, request.Method.Method, session.Redactor.RedactUrl(request.RequestUri?.ToString() ?? ""), status, pausedResponse.ReasonPhrase, trigger?.Id);
+            }
+
+            return pausedResponse;
+        }
+
         var url = session.Redactor.RedactUrl(request.RequestUri?.ToString() ?? "");
         var record = new HttpRecord
         {
@@ -99,7 +123,7 @@ public sealed class DevToolsHttpMessageHandler : DelegatingHandler
             session.Timeline.Complete(record.TimelineEventId, record.DurationMs.Value, $"{record.StatusCode} {record.ReasonPhrase}" + (record.ResponseBytes is { } b ? $", {FormatBytes(b)}" : ""), severity);
             if (failed)
             {
-                session.Errors.Record(null, "http", $"{record.Method} {StripOrigin(url)} returned {record.StatusCode} {record.ReasonPhrase}", precedingEventId: trigger?.Id, exceptionType: "HttpStatus" + record.StatusCode);
+                RecordStatusError(session, record.Method, url, record.StatusCode.Value, record.ReasonPhrase, trigger?.Id);
             }
 
             session.Http.Touch();
@@ -111,13 +135,21 @@ public sealed class DevToolsHttpMessageHandler : DelegatingHandler
             record.Error = ex.GetType().Name + ": " + ex.Message;
             session.Http.MarkFailed(record);
             session.Timeline.Complete(record.TimelineEventId, record.DurationMs.Value, record.Error, DevToolsSeverity.Error);
-            if (ex is not OperationCanceledException)
-            {
-                session.Errors.Record(ex, "http", precedingEventId: trigger?.Id);
-            }
-
+            RecordException(session, ex, trigger?.Id);
             session.Http.Touch();
             throw;
+        }
+    }
+
+    private static void RecordStatusError(DevToolsSession session, string method, string redactedUrl, int status, string? reasonPhrase, long? triggerId) =>
+        session.Errors.Record(null, "http", $"{method} {StripOrigin(redactedUrl)} returned {status} {reasonPhrase}", precedingEventId: triggerId, exceptionType: "HttpStatus" + status);
+
+    /// <summary>A cancelled request is the caller's decision, not an error.</summary>
+    private static void RecordException(DevToolsSession session, Exception exception, long? triggerId)
+    {
+        if (exception is not OperationCanceledException)
+        {
+            session.Errors.Record(exception, "http", precedingEventId: triggerId);
         }
     }
 

@@ -144,24 +144,18 @@ public class TrackingJSRuntime : IJSRuntime
         return record;
     }
 
+    /// <summary>Completes the record, if there is one; a failure is always sent to the error list, paused or not.</summary>
     internal void End(JsInteropRecord? record, Exception? exception)
     {
-        if (record is null)
+        if (record is not null)
         {
-            if (exception is not null and not OperationCanceledException)
-            {
-                // Errors are collected even while paused.
-                Session.Errors.Record(exception, "js-interop", component: Component);
-            }
-
-            return;
+            var elapsed = Stopwatch.GetElapsedTime(record.StartTicks).TotalMilliseconds;
+            var error = exception is null ? null : exception.GetType().Name + ": " + exception.Message;
+            Session.Interop.Complete(record, elapsed, exception is null, error);
+            var severity = exception is not null ? DevToolsSeverity.Error : elapsed >= Session.Options.Diagnostics.SlowJsInteropMs ? DevToolsSeverity.Warning : DevToolsSeverity.Info;
+            Session.Timeline.Complete(record.TimelineEventId, elapsed, exception is null ? null : "failed: " + error, severity);
         }
 
-        var elapsed = Stopwatch.GetElapsedTime(record.StartTicks).TotalMilliseconds;
-        var error = exception is null ? null : exception.GetType().Name + ": " + exception.Message;
-        Session.Interop.Complete(record, elapsed, exception is null, error);
-        var severity = exception is not null ? DevToolsSeverity.Error : elapsed >= Session.Options.Diagnostics.SlowJsInteropMs ? DevToolsSeverity.Warning : DevToolsSeverity.Info;
-        Session.Timeline.Complete(record.TimelineEventId, elapsed, exception is null ? null : "failed: " + error, severity);
         if (exception is not null and not OperationCanceledException)
         {
             Session.Errors.Record(exception, "js-interop", component: Component);

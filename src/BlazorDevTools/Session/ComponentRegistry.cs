@@ -175,9 +175,10 @@ internal sealed class ComponentRegistry
         var state = BlazorReflection.ResolveState(effectiveRenderer, component);
         if (state is null)
         {
-            // Not attached yet (just created) or already disposed by the renderer.
+            // Not attached yet (just created) or already disposed by the renderer. A render proves it was attached,
+            // whether or not it was recorded: renders while capture is paused count too.
             var age = now - record.CreatedAt;
-            if (record.RenderCount > 0 || age > TimeSpan.FromSeconds(5))
+            if (record.HasRendered || age > TimeSpan.FromSeconds(5))
             {
                 MarkDisposed(record, now, collected: false);
             }

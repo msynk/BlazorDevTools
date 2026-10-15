@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using BlazorDevTools.Capabilities;
 using BlazorDevTools.Events;
 using BlazorDevTools.Model;
@@ -45,6 +46,13 @@ internal sealed class RenderTracker
 {
     private static readonly ConcurrentDictionary<Type, PropertyInfo[]> JsRuntimeProperties = new();
     private static readonly ConcurrentDictionary<(string Label, string Ancestor), string> ParentCauseDetails = new();
+    private static readonly ConditionalWeakTable<Delegate, object> FragmentIds = new();
+    private static readonly ConcurrentDictionary<Type, bool> StatefulFragmentTargets = new();
+    private static long _nextFragmentId;
+    private const string FragmentTokenPrefix = "RenderFragment #";
+    private const string NewFragmentChange = "new RenderFragment instance (its output cannot be compared)";
+    private const string StatefulFragmentChange = "RenderFragment reads component state when it runs (its output cannot be compared)";
+    private const int MaxEntriesPerParameter = 150;
     private const string InitialCauseDetail = "First render";
     private const string DisabledCauseDetail = "Cause tracking disabled";
     private const string StateHasChangedCauseDetail = "StateHasChanged outside an event (async continuation, timer, state notification or explicit call)";
@@ -521,6 +529,11 @@ internal sealed class RenderTracker
     /// Snapshots the component's fields and parameters before the render and diffs them against the previous
     /// captured render. Fields answer "what state changed?"; parameters answer "did the parent give me anything new?",
     /// which is what separates a needed re-render from one the parent merely forced.
+    /// <para>
+    /// Runs for the inspected component, and for every component on every render when
+    /// <see cref="DevToolsOptions.CaptureComponentStateOnRender"/> is on, so the parameter walk shares one wall-clock
+    /// budget per render rather than one per parameter.
+    /// </para>
     /// </summary>
     private void CaptureStateDiff(ComponentRecord record, ComponentBase component, RenderSample sample)
     {
@@ -546,28 +559,36 @@ internal sealed class RenderTracker
             record.LastStateSnapshot = snapshot;
 
             var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+            Dictionary<string, string>? fragmentChanges = null;
+            var deadline = Inspection.ObjectInspector.FlattenDeadline();
             foreach (var (name, value, property) in ComponentStateReader.ReadParameters(component))
             {
-                if (_session.Redactor.IsSensitive(property))
+                if (value is Delegate fragment && IsRenderFragment(fragment.GetType()))
                 {
-                    parameters[name] = Inspection.Redactor.RedactedValue;
+                    // Every fragment displays as "RenderFragment", so comparing displays would call new child content
+                    // identical. Compare the instance instead, and never call a fragment unchanged when it reads
+                    // component state as it runs: the same instance can then render different output.
+                    var instance = FragmentTokenPrefix + FragmentInstanceId(fragment);
+                    var readsState = RenderFragmentReadsState(fragment);
+                    parameters[name] = readsState ? instance + " @" + sample.Sequence : instance;
+                    var sameInstance = record.LastParameterSnapshot?.TryGetValue(name, out var previous) == true
+                        && previous.StartsWith(instance, StringComparison.Ordinal)
+                        && (previous.Length == instance.Length || previous[instance.Length] == ' ');
+                    (fragmentChanges ??= new(StringComparer.Ordinal))[name] = sameInstance ? StatefulFragmentChange : NewFragmentChange;
                     continue;
                 }
 
-                parameters[name] = _session.Inspector.Describe(name, value, "", property).Display;
-                // One level deeper than the display string, so a list whose item changed is not mistaken for an
-                // identical parameter. Bounded: this only runs for the component that is being inspected.
-                foreach (var (path, display) in _session.Inspector.Flatten(value, maxDepth: 2, maxItems: 25, maxEntries: 150))
-                {
-                    parameters[path[0] == '[' ? name + path : name + "." + path] = display;
-                }
+                // The parameter's display under its name, then two levels of members (≤ 25 collection items) below it,
+                // so a list whose item changed is not mistaken for an identical parameter. The inspector redacts
+                // sensitive parameters and does not walk them.
+                _session.Inspector.FlattenNamed(parameters, name, value, property, maxDepth: 2, maxItems: 25, maxEntries: parameters.Count + MaxEntriesPerParameter, deadline);
             }
 
             if (record.LastParameterSnapshot is not null)
             {
                 var changes = Inspection.ObjectInspector.Diff(record.LastParameterSnapshot, parameters);
                 // A non-null list is what marks the sample as compared; the empty case shares one array.
-                sample.ChangedParameters = changes.Count == 0 ? Array.Empty<string>() : FormatChanges(changes);
+                sample.ChangedParameters = changes.Count == 0 ? Array.Empty<string>() : FormatChanges(changes, fragmentChanges);
             }
 
             record.LastParameterSnapshot = parameters;
@@ -582,8 +603,33 @@ internal sealed class RenderTracker
         }
     }
 
-    private static string[] FormatChanges(List<Model.StateDiffEntry> changes) =>
-        changes.Select(c => c.Path + ": " + (c.Before ?? "∅") + " → " + (c.After ?? "∅")).ToArray();
+    private static string[] FormatChanges(List<Model.StateDiffEntry> changes, Dictionary<string, string>? fragmentChanges = null) =>
+        changes.Select(c => c.After is not null && fragmentChanges is not null && fragmentChanges.TryGetValue(c.Path, out var fragmentChange)
+            ? c.Path + ": " + fragmentChange
+            : c.Path + ": " + FormatValue(c.Before) + " → " + FormatValue(c.After)).ToArray();
+
+    /// <summary>Shows a fragment's comparison token as the type name: the instance number means nothing to a reader.</summary>
+    private static string FormatValue(string? value) =>
+        value is null ? "∅" : value.StartsWith(FragmentTokenPrefix, StringComparison.Ordinal) ? "RenderFragment" : value;
+
+    private static bool IsRenderFragment(Type type) =>
+        type == typeof(RenderFragment) || (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(RenderFragment<>));
+
+    /// <summary>A number unique to one delegate instance for as long as it lives. Not an identity hash code, which can repeat.</summary>
+    private static object FragmentInstanceId(Delegate fragment) =>
+        FragmentIds.GetValue(fragment, static _ => Interlocked.Increment(ref _nextFragmentId));
+
+    /// <summary>
+    /// True when the fragment can render different output without being recreated. That is the case when its target
+    /// is a component (a method group, or a lambda the component cached in a field, reads the component's fields as it
+    /// runs), a compiler-generated closure that holds a component, or any other object DevTools cannot see into.
+    /// Non-capturing child content compiles to one cached delegate on the compiler's empty closure class; that one
+    /// renders the same output every time and is compared by instance.
+    /// </summary>
+    private static bool RenderFragmentReadsState(Delegate fragment) => fragment.Target is { } target
+        && (target is IComponent || StatefulFragmentTargets.GetOrAdd(target.GetType(), static type =>
+            !type.IsDefined(typeof(CompilerGeneratedAttribute), false)
+            || type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).Any(f => typeof(IComponent).IsAssignableFrom(f.FieldType))));
 
     /// <summary>
     /// Replaces the component's <c>[Inject] IJSRuntime</c> with a tracking decorator. This happens on the first render,

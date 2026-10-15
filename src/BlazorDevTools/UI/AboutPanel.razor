@@ -33,8 +33,8 @@
             </dl>
             <div class="bdt-diag-actions" style="margin-top:6px">
                 <button type="button" @onclick="() => Session.ClearAll()">Clear captured event histories</button>
-                <button type="button" title="Download everything this session captured as JSON (already redacted and bounded)" @onclick="ExportJsonAsync">⬇ Export session (JSON)</button>
-                <button type="button" title="Copy a short Markdown summary: findings, errors, hottest components, failed requests, timeline tail" @onclick="CopyReportAsync">⎘ Copy report (Markdown)</button>
+                <button type="button" title="Download everything this session captured as JSON (already redacted and bounded)" @onclick="() => Export.SessionExporter.DownloadJsonAsync(Session, Host)">⬇ Export session (JSON)</button>
+                <button type="button" title="Copy a short Markdown summary: findings, errors, hottest components, failed requests, timeline tail" @onclick="() => Export.SessionExporter.CopyMarkdownReportAsync(Session, Host)">⎘ Copy report (Markdown)</button>
             </div>
         </div>
     </div>
@@ -60,19 +60,6 @@
 </div>
 
 @code {
-    private async Task ExportJsonAsync()
-    {
-        var name = $"blazor-devtools-session-{Session.Id}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.json";
-        var ok = await Host.DownloadTextAsync(name, Export.SessionExporter.ToJson(Session), "application/json");
-        Host.Notify(ok ? "Export downloaded: " + name : "Export unavailable: the browser bridge is not attached");
-    }
-
-    private async Task CopyReportAsync()
-    {
-        var ok = await Host.CopyTextAsync(Export.SessionExporter.ToMarkdownReport(Session));
-        Host.Notify(ok ? "Report copied as Markdown" : "Clipboard unavailable");
-    }
-
     private string FrameworkDiagnostics()
     {
         var (activitySource, metrics) = Session.FrameworkInstrumentation;

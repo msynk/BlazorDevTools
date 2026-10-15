@@ -129,9 +129,9 @@
             {
                 <dt>Forced re-renders</dt>
                 <dd title="@WastedRenderTooltip">
-                    @if (Record.ParentRendersWithUnchangedParameters > 0)
+                    @if (_forcedRenders > 0)
                     {
-                        <span class="bdt-chip bdt-warn">@Record.ParentRendersWithUnchangedParameters</span>
+                        <span class="bdt-chip bdt-warn">@_forcedRenders</span>
                         <span> of @_comparedRenders compared renders were forced by the parent with parameters identical to the previous render. Override <code>ShouldRender</code>, or stop the parent recreating equivalent values.</span>
                     }
                     else
@@ -236,10 +236,14 @@
     private LifecycleTypeMetrics? _typeMetrics;
     private string _baseName = "";
     private int _comparedRenders;
+    private int _forcedRenders;
+
+    private static readonly RenderCause[] Causes = Enum.GetValues<RenderCause>();
 
     private const string WastedRenderTooltip = "The parent re-rendered and re-applied this component's parameters, but every observable parameter value "
-        + "(display value plus one level of members and up to 25 collection items) was identical to the previous render. Delegates and render fragments "
-        + "compare by target method, so a recreated lambda with the same body counts as unchanged. Blazor only skips such renders for primitive-typed "
+        + "(display value plus two levels of members and up to 25 collection items) was identical to the previous render. Delegates compare by target "
+        + "method, so a recreated lambda with the same body counts as unchanged. Render fragments compare by instance, and one that reads component state "
+        + "as it runs never counts as unchanged, so new child content is never called forced. Blazor only skips such renders for primitive-typed "
         + "parameters; ShouldRender can skip the rest.";
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, (PropertyInfo[] Parameters, PropertyInfo[] Cascading, PropertyInfo[] Injected)> PropertyCache = new();
 
@@ -270,8 +274,15 @@
 
         var renders = Record.Renders;
         _renders = renders.Reverse().Take(50).ToArray();
-        _comparedRenders = renders.Count(r => r.ParametersCompared);
-        _causes = renders.GroupBy(r => r.Cause).Select(g => new CauseRow(g.Key.ToString(), g.Count(), string.Join(" · ", g.Select(r => r.CauseDetail).Where(d => d is not null).Distinct().Take(3)))).OrderByDescending(c => c.Count).ToList();
+        // Counts come from session-long counters, like the render total above them; the retained samples only supply
+        // example details. Counting the samples would cap every figure at MaxRendersPerComponent.
+        _comparedRenders = Record.RendersWithComparedParameters;
+        _forcedRenders = Record.ParentRendersWithUnchangedParameters;
+        _causes = Causes
+            .Select(cause => new CauseRow(cause.ToString(), Record.RendersByCause(cause), string.Join(" · ", renders.Where(r => r.Cause == cause).Select(r => r.CauseDetail).Where(d => d is not null).Distinct().Take(3))))
+            .Where(c => c.Count > 0)
+            .OrderByDescending(c => c.Count)
+            .ToList();
         _children = Session.Components.All.Where(c => !c.IsDisposed && !c.IsHidden && c.Parent is not null && NearestVisibleAncestor(c) == Record).OrderBy(c => c.ComponentId).ToList();
         _errors = Session.Errors.Snapshot().Where(e => e.ComponentInstanceId == Record.InstanceId).Reverse().ToList();
         Session.TypeMetrics.TryGetValue(Record.DisplayName, out _typeMetrics);

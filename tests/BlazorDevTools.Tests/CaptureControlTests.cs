@@ -4,6 +4,9 @@ using BlazorDevTools.Instrumentation;
 using BlazorDevTools.Model;
 using BlazorDevTools.Session;
 using Bunit;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 
@@ -132,8 +135,95 @@ public class CaptureControlTests : BunitContext
         Assert.Contains(afterResume.Changes, c => c.Path == "Count" && c.Before == "1" && c.After == "4");
     }
 
+    [Fact]
+    public async Task Failed_http_requests_still_reach_the_error_list_while_paused()
+    {
+        using var failing = new HttpMessageInvoker(new DevToolsHttpMessageHandler(Session) { InnerHandler = new StubHandler(new HttpResponseMessage(HttpStatusCode.InternalServerError)) });
+        using var throwing = new HttpMessageInvoker(new DevToolsHttpMessageHandler(Session) { InnerHandler = new ThrowingHandler(new HttpRequestException("connection refused")) });
+        using var cancelled = new HttpMessageInvoker(new DevToolsHttpMessageHandler(Session) { InnerHandler = new ThrowingHandler(new TaskCanceledException()) });
+
+        Session.PauseCapture();
+        var response = await failing.SendAsync(new HttpRequestMessage(HttpMethod.Get, "https://example.test/api/items?token=s3cr3t"), CancellationToken.None);
+        await Assert.ThrowsAsync<HttpRequestException>(() => throwing.SendAsync(new HttpRequestMessage(HttpMethod.Get, "https://example.test/down"), CancellationToken.None));
+        await Assert.ThrowsAsync<TaskCanceledException>(() => cancelled.SendAsync(new HttpRequestMessage(HttpMethod.Get, "https://example.test/slow"), CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        // The network log and the timeline stay frozen; the error list does not.
+        Assert.Empty(Session.Http.Snapshot());
+        Assert.DoesNotContain(Session.Timeline.Snapshot(), e => e.Kind is DevToolsEventKind.Http or DevToolsEventKind.Error);
+        var errors = Session.Errors.Snapshot();
+        Assert.Equal(2, errors.Length);
+        var status = Assert.Single(errors, e => e.ExceptionType == "HttpStatus500");
+        Assert.StartsWith("GET /api/items?token=", status.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cr3t", status.Message, StringComparison.Ordinal);
+        Assert.Single(errors, e => e.ExceptionType == typeof(HttpRequestException).FullName);
+    }
+
+    /// <summary>
+    /// The click is not in the timeline while paused, so nothing may point at it. It used to be attached to the
+    /// activity anyway, with id 0, and became the "preceding event" of every error raised inside the handler.
+    /// </summary>
+    [Fact]
+    public void A_ui_event_that_starts_while_paused_is_never_used_as_a_trigger()
+    {
+        var cut = Render<ClickCallback>();
+        var clicks = 0;
+        ErrorRecord? error = null;
+        cut.Instance.OnClicked = () => error = Session.Errors.Record(new InvalidOperationException("click " + ++clicks), "test");
+
+        Session.PauseCapture();
+        cut.Find("button").Click();
+
+        Assert.NotNull(error);
+        Assert.Null(error!.PrecedingEventId);
+        Assert.Null(Session.LastUiEventId);
+        Assert.DoesNotContain(Session.Timeline.Snapshot(), e => e.Kind == DevToolsEventKind.UiEvent);
+
+        Session.ResumeCapture();
+        cut.Find("button").Click();
+
+        var click = Assert.Single(Session.Timeline.Snapshot(), e => e.Kind == DevToolsEventKind.UiEvent);
+        Assert.Equal(click.Id, Session.LastUiEventId);
+        Assert.Equal(click.Id, error!.PrecedingEventId);
+    }
+
+    /// <summary>Disposal detection must use "has rendered", like cause detection, or a paused-only component lingers for 5 s.</summary>
+    [Fact]
+    public void A_component_that_only_rendered_while_paused_is_marked_disposed_as_soon_as_it_is_removed()
+    {
+        var cut = Render<ParentComponent>(ps => ps.Add(p => p.ShowChild, false));
+
+        Session.PauseCapture();
+        cut.Render(ps => ps.Add(p => p.ShowChild, true));
+        var child = Session.Components.All.Single(r => r.Type == typeof(ChildComponent));
+        Assert.Equal(0, child.RenderCount);
+        Assert.Equal(1, child.SkippedRenders);
+
+        cut.Render(ps => ps.Add(p => p.ShowChild, false));
+        Session.Components.Refresh(force: true);
+
+        Assert.True(child.IsDisposed);
+    }
+
+    public sealed class ClickCallback : ComponentBase
+    {
+        public Action? OnClicked { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "button");
+            builder.AddAttribute(1, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, () => OnClicked?.Invoke()));
+            builder.CloseElement();
+        }
+    }
+
     private sealed class StubHandler(HttpResponseMessage response) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(response);
+    }
+
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromException<HttpResponseMessage>(exception);
     }
 }

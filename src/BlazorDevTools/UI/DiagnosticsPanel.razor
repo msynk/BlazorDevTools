@@ -44,7 +44,10 @@
                         {
                             <button type="button" @onclick='() => Host.ShowPanel("services")'>Services ↗</button>
                         }
-                        <button type="button" @onclick="() => Host.SelectEvent(f.TimelineEventId)">Timeline ↗</button>
+                        @if (f.TimelineEventId > 0)
+                        {
+                            <button type="button" @onclick="() => Host.SelectEvent(f.TimelineEventId)">Timeline ↗</button>
+                        }
                         @if (!f.Dismissed)
                         {
                             <button type="button" @onclick="() => Session.Diagnostics.Dismiss(d.EffectiveFingerprint)">Dismiss</button>

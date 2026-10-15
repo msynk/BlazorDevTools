@@ -117,6 +117,33 @@ public class ObjectInspectorTests
         Assert.Equal(Redactor.RedactedValue, flatAfter["Password"]);
     }
 
+    /// <summary>
+    /// Parameter capture walks every parameter of a component on every captured render, so the walks share one
+    /// budget. A spent budget still writes each value's own entry: a parameter missing from the snapshot would be
+    /// reported as removed and then added, instead of simply compared at the top level.
+    /// </summary>
+    [Fact]
+    public void Named_flatten_shares_the_budget_and_always_writes_the_root_entry()
+    {
+        var inspector = Create();
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        inspector.FlattenNamed(result, "First", new Node(), member: null, maxDepth: 2, maxItems: 25, maxEntries: 150, ObjectInspector.FlattenDeadline());
+        Assert.Equal("\"root\"", result["First.Name"]);
+        Assert.Equal(Redactor.RedactedValue, result["First.Password"]);
+        Assert.Contains("First.Numbers[2]", result.Keys);
+        var walked = result.Count;
+
+        // Spent wall-clock budget: the root entry is written, nothing below it is read (Throws would be).
+        inspector.FlattenNamed(result, "Second", new Node(), member: null, maxDepth: 2, maxItems: 25, maxEntries: 150, deadline: 0);
+        Assert.Equal(walked + 1, result.Count);
+        Assert.Contains("Second", result.Keys);
+
+        // The entry cap counts the whole dictionary, so it is the caller's running total that bounds the walk.
+        inspector.FlattenNamed(result, "Third", new Node(), member: null, maxDepth: 2, maxItems: 25, maxEntries: result.Count + 2, ObjectInspector.FlattenDeadline());
+        Assert.Equal(walked + 1 + 2, result.Count);
+    }
+
     [Fact]
     public void Max_depth_is_enforced()
     {

@@ -190,7 +190,7 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
             return;
         }
 
-        Session.LastNavigationEventId = Session.Timeline.Record(new DevToolsEvent
+        var recordedId = Session.Timeline.Record(new DevToolsEvent
         {
             Kind = DevToolsEventKind.Navigation,
             Category = "navigation",
@@ -198,6 +198,12 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
             Detail = e.IsNavigationIntercepted ? "intercepted link" : "programmatic",
             ParentEventId = Session.CurrentTriggerEventId,
         });
+
+        // Not recorded while capture is paused: there is no event to point at.
+        if (recordedId > 0)
+        {
+            Session.LastNavigationEventId = recordedId;
+        }
     }
 
     private void ApplySnapshot(BrowserSnapshot? s)

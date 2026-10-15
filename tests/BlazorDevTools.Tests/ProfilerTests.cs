@@ -165,6 +165,55 @@ public class ProfilerTests : BunitContext
         Assert.Contains(context.Notifications, n => n.StartsWith("Export downloaded", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The ring keeps 100 samples per instance. Fractions and cause breakdowns computed from it disagreed with the
+    /// session-long render counters next to them: "250 of 100 compared renders", or a Causes column that stopped at 100.
+    /// </summary>
+    [Fact]
+    public void Inspector_and_grouped_profiler_figures_add_up_beyond_the_sample_ring()
+    {
+        var panel = RenderPanel();
+        var cut = Render<WastedRenderTests.ListParent>();
+        var child = Session.Components.All.Single(r => r.Type == typeof(WastedRenderTests.ListChild));
+        panel.InvokeAsync(() => panel.Instance.SelectComponent(child.InstanceId));
+
+        // The first render after selecting starts the capture; the 120 after it are compared, and all are forced.
+        for (var i = 0; i < 121; i++)
+        {
+            cut.InvokeAsync(() => cut.Instance.Bump());
+        }
+
+        Assert.Equal(100, child.Renders.Length);
+        panel.Find("button[aria-label='Refresh captured data']").Click();
+        Assert.Contains("of 120 compared renders were forced", panel.Markup, StringComparison.Ordinal);
+        var parentCause = Assert.Single(panel.FindAll("tr"), r => r.QuerySelector("td")?.TextContent == "ParentRender");
+        Assert.Equal("121", parentCause.QuerySelectorAll("td")[1].TextContent.Trim());
+
+        panel.FindAll(".bdt-tab").First(t => t.TextContent.Contains("Profiler", StringComparison.Ordinal)).Click();
+        panel.Find("input[aria-label='Group by type']").Change(true);
+        var grouped = Assert.Single(panel.FindAll("tbody tr.bdt-row"), r => r.TextContent.Contains("ListChild", StringComparison.Ordinal));
+        var cells = grouped.QuerySelectorAll("td").Select(c => c.TextContent.Trim()).ToList();
+        Assert.Equal("122", cells[2]);
+        Assert.Equal("121 parent · 1 initial", cells[6]);
+    }
+
+    /// <summary>A navigation while paused is not in the timeline, so it must not be remembered as one.</summary>
+    [Fact]
+    public void Navigation_while_paused_leaves_no_event_id_behind()
+    {
+        RenderPanel();
+        var navigation = Services.GetRequiredService<NavigationManager>();
+
+        Session.PauseCapture();
+        navigation.NavigateTo("/paused");
+        Assert.Null(Session.LastNavigationEventId);
+
+        Session.ResumeCapture();
+        navigation.NavigateTo("/resumed");
+        var recorded = Session.Timeline.Find(Session.LastNavigationEventId!.Value);
+        Assert.Equal("Navigate to /resumed", recorded!.Title);
+    }
+
     private IRenderedComponent<DevToolsPanel> RenderPanel()
     {
         var module = JSInterop.SetupModule("./_content/BlazorDevTools/devtools.js");
