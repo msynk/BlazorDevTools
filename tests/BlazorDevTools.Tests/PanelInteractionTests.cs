@@ -210,6 +210,37 @@ public class PanelInteractionTests : BunitContext
     }
 
     [Fact]
+    public void A_children_only_value_tree_shows_the_root_members_and_indents_nested_ones()
+    {
+        var cut = Render<ValueTree>(parameters => parameters
+            .Add(p => p.Root, new SnapshotSample())
+            .Add(p => p.Name, "SnapshotSample")
+            .Add(p => p.Inspector, Session.Inspector)
+            .Add(p => p.ChildrenOnly, true));
+
+        var rows = cut.FindAll(".bdt-vt-row");
+        Assert.Contains(rows, r => r.TextContent.Contains("Theme:", StringComparison.Ordinal) && r.GetAttribute("style")!.Contains("padding-left:0px", StringComparison.Ordinal));
+        Assert.DoesNotContain(rows, r => r.TextContent.Contains("SnapshotSample:", StringComparison.Ordinal));
+
+        rows.First(r => r.TextContent.Contains("Nested:", StringComparison.Ordinal)).QuerySelector(".bdt-caret")!.Click();
+
+        var depth = cut.FindAll(".bdt-vt-row").First(r => r.TextContent.Contains("Depth:", StringComparison.Ordinal));
+        Assert.Contains("padding-left:14px", depth.GetAttribute("style"), StringComparison.Ordinal);
+    }
+
+    private sealed class SnapshotSample
+    {
+        public string Theme { get; } = "dark";
+
+        public NestedSample Nested { get; } = new();
+    }
+
+    private sealed class NestedSample
+    {
+        public int Depth { get; } = 2;
+    }
+
+    [Fact]
     public void Selecting_a_component_through_the_host_stops_capturing_the_previous_one()
     {
         var cut = RenderPanel();

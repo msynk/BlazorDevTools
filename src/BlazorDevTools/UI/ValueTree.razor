@@ -44,7 +44,10 @@
     {
         var (node, depth) = ctx;
         var open = _expanded.Contains(node.Path);
-        if (!(ChildrenOnly && depth == 0))
+        // The root is the only node with an empty path; its children render at the root's depth, so depth alone
+        // cannot tell them apart.
+        var hiddenRoot = ChildrenOnly && node.Path.Length == 0;
+        if (!hiddenRoot)
         {
             <div class="bdt-vt-row" style="padding-left:@(depth * 14)px" title="@node.TypeName">
                 @if (node.IsExpandable)
@@ -67,7 +70,7 @@
         {
             foreach (var child in ChildrenOf(node.Path))
             {
-                @Render((child, ChildrenOnly ? depth : depth + 1))
+                @Render((child, hiddenRoot ? depth : depth + 1))
             }
         }
     };

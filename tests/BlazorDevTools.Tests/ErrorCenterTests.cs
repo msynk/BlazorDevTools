@@ -25,6 +25,28 @@ public class ErrorCenterTests
     }
 
     [Fact]
+    public void One_exception_reported_by_two_capture_paths_is_one_error()
+    {
+        var (session, scope) = TestHelpers.CreateSession();
+        using (scope)
+        {
+            var component = session.Components.Register(new ChildComponent(), typeof(ChildComponent), isDevTools: false, isHidden: false)!;
+            var thrown = new InvalidOperationException("Render-time failure");
+
+            // The render wrapper records it with the component, then the ErrorBoundary that caught it logs it.
+            var fromRender = session.Errors.Record(thrown, "render", component: component);
+            var fromLog = session.Errors.Record(thrown, "error-boundary", "Unhandled exception rendering component: Render-time failure");
+            // A different exception with the same message is a separate occurrence.
+            session.Errors.Record(new InvalidOperationException("Render-time failure"), "error-boundary");
+
+            Assert.Same(fromRender, fromLog);
+            Assert.Equal(2, session.Errors.Count);
+            Assert.Equal(2, session.Errors.TotalOccurrences);
+            Assert.Equal(1, component.ErrorCount);
+        }
+    }
+
+    [Fact]
     public void Clear_all_resets_error_and_http_aggregate_counts()
     {
         var (session, scope) = TestHelpers.CreateSession();

@@ -341,6 +341,11 @@ internal static class ActivityObserver
             }
         }
 
+        if (failed && errorType is not null)
+        {
+            session.NoteFailedTrigger(evt.Id, errorType);
+        }
+
         var detail = failed ? "failed" + (errorType is null ? "" : " with " + errorType) : "completed";
         var severity = failed ? DevToolsSeverity.Error : duration >= session.Options.Diagnostics.SlowEventHandlerMs ? DevToolsSeverity.Warning : DevToolsSeverity.Info;
         var stoppedTags = new Dictionary<string, object?>(StringComparer.Ordinal);

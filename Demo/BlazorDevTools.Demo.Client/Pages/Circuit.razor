@@ -42,11 +42,13 @@ else
 
     private void Kill()
     {
-        // Exceptions thrown outside the renderer's control end the circuit; DevTools captures the logged error first.
+        // Background work reports its failure to the renderer with DispatchExceptionAsync. With no ErrorBoundary around
+        // the page that is fatal for the circuit; DevTools captures the logged error first. (A throw inside InvokeAsync
+        // would only fault the discarded task and nothing would happen.)
         _ = Task.Run(async () =>
         {
             await Task.Delay(100);
-            await InvokeAsync(() => throw new InvalidOperationException("Simulated unhandled exception dispatched to the circuit."));
+            await DispatchExceptionAsync(new InvalidOperationException("Simulated unhandled exception dispatched to the circuit."));
         });
     }
 }

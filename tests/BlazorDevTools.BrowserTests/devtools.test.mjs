@@ -56,6 +56,7 @@ function installBrowser({ localStorage = new Storage(), sessionStorage = new Sto
         value: { onLine: true, userAgent: "node" },
         configurable: true,
     });
+    return listeners;
 }
 
 test("storage values are redacted before leaving the browser", async () => {
@@ -157,5 +158,76 @@ test("detach drops pending calls and bridge callbacks are not traced", async () 
     const batches = secondReports.filter(args => args[0] === "ReportJsToDotNet");
     assert.equal(batches.length, 1);
     assert.deepEqual(batches[0][1].map(entry => entry.identifier), ["App.Second"]);
+    bridge.detach();
+});
+
+test("calls on a DotNetObjectReference are tracked, the bridge's own reference is not", async () => {
+    installBrowser();
+    const dispatched = [];
+    class DotNetObject {
+        constructor(id) { this._id = id; }
+        invokeMethodAsync(method, ...args) { dispatched.push([this._id, method, ...args]); return Promise.resolve(method === "Fail" ? Promise.reject(new Error("boom")) : null); }
+        invokeMethod(method, ...args) { dispatched.push([this._id, method, ...args]); return null; }
+    }
+    window.DotNet.DotNetObject = DotNetObject;
+    const originalAsync = DotNetObject.prototype.invokeMethodAsync;
+    const bridge = await loadBridge();
+    const bridgeRef = new DotNetObject(1);
+    const appRef = new DotNetObject(7);
+
+    bridge.attach(bridgeRef, { trackJsToDotNet: true });
+    await appRef.invokeMethodAsync("OnTick", 42);
+    appRef.invokeMethod("Sync");
+    await assert.rejects(appRef.invokeMethodAsync("Fail"));
+    await new Promise(resolve => setTimeout(resolve, 550));
+
+    await new DotNetObject(3).invokeMethodAsync("DispatchEventAsync", {}, {});
+    await new DotNetObject(4).invokeMethodAsync("OnSpacerAfterVisible", 0, 0, 0);
+    await new Promise(resolve => setTimeout(resolve, 550));
+
+    const reports = dispatched.filter(call => call[0] === 1 && call[1] === "ReportJsToDotNet");
+    assert.equal(reports.length, 1, "framework event dispatch and Virtualize plumbing are not application interop");
+    const entries = reports[0][2];
+    assert.deepEqual(entries.map(entry => [entry.identifier, entry.args, entry.sync]), [["object#7.OnTick", 1, false], ["object#7.Sync", 0, true], ["object#7.Fail", 0, false]]);
+    assert.equal(entries[2].error, "boom");
+    assert.ok(dispatched.some(call => call[0] === 7 && call[1] === "OnTick" && call[2] === 42), "the application call still reaches .NET");
+
+    bridge.detach();
+    assert.equal(DotNetObject.prototype.invokeMethodAsync, originalAsync);
+});
+
+test("a send failure on a dead circuit connection is not reported back over that connection", async () => {
+    const listeners = installBrowser();
+    const reports = [];
+    const bridge = await loadBridge();
+    bridge.attach({ invokeMethodAsync: (method, payload) => { reports.push([method, payload && payload.message]); return Promise.resolve(); } }, {});
+
+    listeners.get("unhandledrejection")({ reason: new Error("Cannot send data if the connection is not in the 'Connected' State.") });
+    listeners.get("error")({ error: new Error("Cannot send data if the connection is not in the 'Connected' State.") });
+    listeners.get("unhandledrejection")({ reason: new Error("application failure") });
+
+    assert.deepEqual(reports, [["OnJsError", "application failure"]]);
+    bridge.detach();
+});
+
+test("Ctrl+K opens the palette wherever focus is, but only while the panel is open", async () => {
+    const listeners = installBrowser();
+    let panelOpen = false;
+    globalThis.document.querySelector = selector => (selector === ".bdt-root .bdt-panel" && panelOpen ? {} : null);
+    const reports = [];
+    const bridge = await loadBridge();
+    bridge.attach({ invokeMethodAsync: method => { reports.push(method); return Promise.resolve(); } }, {});
+    const press = (modifiers = {}) => {
+        const e = { key: "k", ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, ...modifiers, prevented: false, preventDefault() { this.prevented = true; } };
+        listeners.get("keydown")(e);
+        return e;
+    };
+
+    assert.equal(press().prevented, false, "the application keeps Ctrl+K while the panel is closed");
+    panelOpen = true;
+    assert.equal(press().prevented, true);
+    assert.equal(press({ ctrlKey: false, metaKey: true }).prevented, true);
+    assert.equal(press({ shiftKey: true }).prevented, false);
+    assert.deepEqual(reports, ["OnPaletteShortcut", "OnPaletteShortcut"]);
     bridge.detach();
 });

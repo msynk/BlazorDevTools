@@ -197,6 +197,29 @@ public sealed class DevToolsSession : IDisposable
     /// <summary>The UI event (or navigation) currently executing on this session, resolved from Activity context.</summary>
     internal long? CurrentTriggerEventId => ActivityObserver.CurrentTriggerEvent(this)?.Id;
 
+    private FailedTrigger? _failedTrigger;
+
+    /// <summary>
+    /// The framework stops a UI event's activity, marked failed with the exception type, before it logs the handler's
+    /// exception, so by the time that log entry arrives the event is no longer on the Activity stack. The failure is
+    /// kept briefly so the logged exception can still point at the event that threw.
+    /// </summary>
+    internal void NoteFailedTrigger(long eventId, string errorType) => Volatile.Write(ref _failedTrigger, new FailedTrigger(eventId, errorType, DateTimeOffset.UtcNow));
+
+    /// <summary>Claims the recently failed UI event if it failed with exactly this exception type; each failure is claimed once.</summary>
+    internal long? TakeFailedTrigger(string exceptionType)
+    {
+        var failed = Volatile.Read(ref _failedTrigger);
+        if (failed is null || !string.Equals(failed.ErrorType, exceptionType, StringComparison.Ordinal) || DateTimeOffset.UtcNow - failed.At > TimeSpan.FromSeconds(5))
+        {
+            return null;
+        }
+
+        return ReferenceEquals(Interlocked.CompareExchange(ref _failedTrigger, null, failed), failed) ? failed.EventId : null;
+    }
+
+    private sealed record FailedTrigger(long EventId, string ErrorType, DateTimeOffset At);
+
     internal ConcurrentDictionary<string, LifecycleTypeMetrics> TypeMetrics { get; } = new(StringComparer.Ordinal);
 
     internal void Touch() => Interlocked.Increment(ref _version);

@@ -9,6 +9,8 @@ let jsToDotNetBatch = [];
 let flushTimer = null;
 let originalInvokeAsync = null;
 let originalInvoke = null;
+let originalObjectInvokeAsync = null;
+let originalObjectInvoke = null;
 let bridgeGeneration = 0;
 const listeners = [];
 
@@ -42,6 +44,14 @@ function matchesShortcut(e) {
         && (e.key || "").toLowerCase() === shortcut.key;
 }
 
+function isPaletteShortcut(e) {
+    return (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key || "").toLowerCase() === "k";
+}
+
+function isPanelOpen() {
+    return !!(document.querySelector && document.querySelector(".bdt-root .bdt-panel"));
+}
+
 function scheduleFlush() {
     if (flushTimer) return;
     flushTimer = setTimeout(() => {
@@ -51,6 +61,18 @@ function scheduleFlush() {
         jsToDotNetBatch = [];
         report("ReportJsToDotNet", batch);
     }, 500);
+}
+
+// Instance methods blazor.web.js itself invokes: renderer event dispatch, root components and Virtualize (which the
+// DevTools panel uses too). They are framework plumbing - UI events have their own timeline entries - not application
+// interop, and counting them would make every click and keystroke look like a JS -> .NET call.
+const frameworkInstanceMethods = new Set(["DispatchEventAsync", "AddRootComponent", "RemoveRootComponent", "SetRootComponentParameters", "OnSpacerBeforeVisible", "OnSpacerAfterVisible"]);
+
+// Once a Server circuit's connection is down, every report fails inside Blazor with an unhandled rejection carrying
+// this SignalR message. Reporting that rejection fails the same way and raises another one: a tight loop that can
+// never reach .NET anyway.
+function isConnectionDown(err) {
+    return !!(err && typeof err.message === "string" && err.message.includes("connection is not in the 'Connected' State"));
 }
 
 function isDevToolsCall(assemblyOrRef, method) {
@@ -64,59 +86,84 @@ function queueJsToDotNet(entry, generation) {
     scheduleFlush();
 }
 
+function finishCall(entry, start, generation, err, failed) {
+    entry.durationMs = performance.now() - start;
+    if (failed) entry.error = String(err && err.message ? err.message : err);
+    queueJsToDotNet(entry, generation);
+}
+
+function trackAsync(identifier, argCount, invoke) {
+    const start = performance.now();
+    const generation = bridgeGeneration;
+    const entry = { identifier, args: argCount, sync: false, at: Date.now() };
+    let promise;
+    try {
+        promise = invoke();
+    } catch (err) {
+        finishCall(entry, start, generation, err, true);
+        throw err;
+    }
+    return promise.then(r => {
+        finishCall(entry, start, generation);
+        return r;
+    }, err => {
+        finishCall(entry, start, generation, err, true);
+        throw err;
+    });
+}
+
+function trackSync(identifier, argCount, invoke) {
+    const start = performance.now();
+    const generation = bridgeGeneration;
+    const entry = { identifier, args: argCount, sync: true, at: Date.now() };
+    try {
+        const r = invoke();
+        finishCall(entry, start, generation);
+        return r;
+    } catch (err) {
+        finishCall(entry, start, generation, err, true);
+        throw err;
+    }
+}
+
 function wrapDotNet() {
     const DotNet = window.DotNet;
     if (!DotNet || originalInvokeAsync) return;
     originalInvokeAsync = DotNet.invokeMethodAsync;
     originalInvoke = DotNet.invokeMethod;
     DotNet.invokeMethodAsync = function (assemblyName, methodIdentifier, ...args) {
+        const call = () => originalInvokeAsync.apply(this, [assemblyName, methodIdentifier, ...args]);
+        if (isDevToolsCall(assemblyName, methodIdentifier)) return call();
         const isObjectRef = typeof assemblyName !== "string";
         const target = isObjectRef ? "object#" + (assemblyName && assemblyName.__dotNetObject !== undefined ? assemblyName.__dotNetObject : "?") : assemblyName;
-        if (isDevToolsCall(assemblyName, methodIdentifier)) {
-            return originalInvokeAsync.apply(this, [assemblyName, methodIdentifier, ...args]);
-        }
-        const start = performance.now();
-        const generation = bridgeGeneration;
-        const entry = { identifier: target + "." + methodIdentifier, args: args.length, sync: false, at: Date.now() };
-        let promise;
-        try {
-            promise = originalInvokeAsync.apply(this, [assemblyName, methodIdentifier, ...args]);
-        } catch (err) {
-            entry.durationMs = performance.now() - start;
-            entry.error = String(err && err.message ? err.message : err);
-            queueJsToDotNet(entry, generation);
-            throw err;
-        }
-        return promise.then(r => {
-            entry.durationMs = performance.now() - start;
-            queueJsToDotNet(entry, generation);
-            return r;
-        }, err => {
-            entry.durationMs = performance.now() - start;
-            entry.error = String(err && err.message ? err.message : err);
-            queueJsToDotNet(entry, generation);
-            throw err;
-        });
+        return trackAsync(target + "." + methodIdentifier, args.length, call);
     };
     if (originalInvoke) {
         DotNet.invokeMethod = function (assemblyName, methodIdentifier, ...args) {
-            if (isDevToolsCall(assemblyName, methodIdentifier)) {
-                return originalInvoke.apply(this, [assemblyName, methodIdentifier, ...args]);
-            }
-            const start = performance.now();
-            const generation = bridgeGeneration;
-            const entry = { identifier: assemblyName + "." + methodIdentifier, args: args.length, sync: true, at: Date.now() };
-            try {
-                const r = originalInvoke.apply(this, [assemblyName, methodIdentifier, ...args]);
-                entry.durationMs = performance.now() - start;
-                queueJsToDotNet(entry, generation);
-                return r;
-            } catch (err) {
-                entry.durationMs = performance.now() - start;
-                entry.error = String(err && err.message ? err.message : err);
-                queueJsToDotNet(entry, generation);
-                throw err;
-            }
+            const call = () => originalInvoke.apply(this, [assemblyName, methodIdentifier, ...args]);
+            if (isDevToolsCall(assemblyName, methodIdentifier)) return call();
+            return trackSync(assemblyName + "." + methodIdentifier, args.length, call);
+        };
+    }
+
+    // Calls on a DotNetObjectReference (dotNetRef.invokeMethodAsync("OnTick")) go straight to the call dispatcher and
+    // never pass through DotNet.invokeMethodAsync, so the instance methods are wrapped as well. The bridge's own
+    // reference is a DotNetObject too; its reports are DevTools traffic, not application calls.
+    const proto = DotNet.DotNetObject && DotNet.DotNetObject.prototype;
+    if (proto && typeof proto.invokeMethodAsync === "function") {
+        originalObjectInvokeAsync = proto.invokeMethodAsync;
+        proto.invokeMethodAsync = function (methodIdentifier, ...args) {
+            const call = () => originalObjectInvokeAsync.apply(this, [methodIdentifier, ...args]);
+            if (this === dotnetRef || frameworkInstanceMethods.has(methodIdentifier)) return call();
+            return trackAsync("object#" + (this._id ?? "?") + "." + methodIdentifier, args.length, call);
+        };
+    }
+    if (proto && typeof proto.invokeMethod === "function") {
+        originalObjectInvoke = proto.invokeMethod;
+        proto.invokeMethod = function (methodIdentifier, ...args) {
+            const call = () => originalObjectInvoke.apply(this, [methodIdentifier, ...args]);
+            if (this === dotnetRef || frameworkInstanceMethods.has(methodIdentifier)) return call();
+            return trackSync("object#" + (this._id ?? "?") + "." + methodIdentifier, args.length, call);
         };
     }
 }
@@ -126,8 +173,13 @@ function unwrapDotNet() {
     if (!DotNet || !originalInvokeAsync) return;
     DotNet.invokeMethodAsync = originalInvokeAsync;
     if (originalInvoke) DotNet.invokeMethod = originalInvoke;
+    const proto = DotNet.DotNetObject && DotNet.DotNetObject.prototype;
+    if (proto && originalObjectInvokeAsync) proto.invokeMethodAsync = originalObjectInvokeAsync;
+    if (proto && originalObjectInvoke) proto.invokeMethod = originalObjectInvoke;
     originalInvokeAsync = null;
     originalInvoke = null;
+    originalObjectInvokeAsync = null;
+    originalObjectInvoke = null;
 }
 
 function snapshot() {
@@ -152,6 +204,7 @@ export function attach(ref, options) {
 
     on(window, "error", e => {
         const err = e.error;
+        if (isConnectionDown(err)) return;
         report("OnJsError", {
             message: e.message || (err && err.message) || "Unknown error",
             source: e.filename ? e.filename + ":" + e.lineno + ":" + e.colno : null,
@@ -161,6 +214,7 @@ export function attach(ref, options) {
     });
     on(window, "unhandledrejection", e => {
         const reason = e.reason;
+        if (isConnectionDown(reason)) return;
         report("OnJsError", {
             message: reason && reason.message ? reason.message : String(reason),
             source: null,
@@ -179,6 +233,11 @@ export function attach(ref, options) {
         if (matchesShortcut(e)) {
             e.preventDefault();
             report("OnToggleShortcut");
+        } else if (isPaletteShortcut(e) && isPanelOpen()) {
+            // While the panel is open Ctrl+K belongs to it wherever focus is (opening the panel from the badge leaves
+            // focus on the page), and the browser must not also act on it (Chrome focuses its address bar).
+            e.preventDefault();
+            report("OnPaletteShortcut");
         }
     }, true);
 

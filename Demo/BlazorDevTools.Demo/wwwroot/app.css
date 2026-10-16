@@ -3,6 +3,7 @@
 html, body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: var(--fg); background: var(--bg); }
 a { color: var(--accent); }
 h1 { font-size: 1.6rem; margin: 0 0 .5rem; }
+h1:focus { outline: none; }
 h2 { font-size: 1.15rem; margin: 1.2rem 0 .5rem; }
 p { line-height: 1.5; }
 code, kbd { font-family: ui-monospace, Consolas, monospace; background: #eef1f4; padding: 1px 4px; border-radius: 3px; font-size: .9em; }

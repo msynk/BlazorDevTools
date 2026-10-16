@@ -1,4 +1,5 @@
 @page "/products"
+@implements IDisposable
 @inject CartState Cart
 
 <PageTitle>Products</PageTitle>
@@ -16,4 +17,11 @@
 
 @code {
     private bool _searchOnType;
+
+    // The Add buttons belong to ProductList, so only it re-renders after a click; the cart summary above lives here.
+    protected override void OnInitialized() => Cart.Changed += OnCartChanged;
+
+    private void OnCartChanged(BlazorDevTools.State.StateChangeInfo change) => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Cart.Changed -= OnCartChanged;
 }

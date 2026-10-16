@@ -134,6 +134,49 @@ public class BatchAttributionTests : BunitContext
         Assert.Equal(before + 1, Session.Timeline.Snapshot().Count(e => e.Kind == DevToolsEventKind.UiEvent));
     }
 
+    [Fact]
+    public void An_exception_logged_after_its_event_handler_failed_points_at_that_event()
+    {
+        Render<ParentComponent>();
+        var eventId = EmitFailure("Event onclick -> MyApp.Pages.Errors.ThrowInHandler", typeof(InvalidOperationException).FullName!);
+
+        // The framework logs the handler's exception only after it has stopped the event's activity.
+        var logged = Session.Errors.Record(new InvalidOperationException("Handler failure"), "blazor");
+        var later = Session.Errors.Record(new InvalidOperationException("Unrelated failure"), "blazor");
+
+        Assert.Equal(eventId, logged.PrecedingEventId);
+        Assert.Null(later.PrecedingEventId);
+    }
+
+    [Fact]
+    public void A_failed_event_is_not_claimed_by_an_exception_of_another_type()
+    {
+        Render<ParentComponent>();
+        EmitFailure("Event onclick -> MyApp.Pages.Errors.ThrowAsync", typeof(TimeoutException).FullName!);
+
+        var logged = Session.Errors.Record(new InvalidOperationException("Something else"), "blazor");
+
+        Assert.Null(logged.PrecedingEventId);
+    }
+
+    /// <summary>Mimics ComponentsActivitySource failing an event: error.type tag and error status, set when stopping.</summary>
+    private long EmitFailure(string displayName, string errorType)
+    {
+        using var source = new ActivitySource(ActivityObserver.SourceName);
+        var activity = source.CreateActivity(ActivityObserver.HandleEventName, ActivityKind.Client);
+        if (activity is null)
+        {
+            Assert.Fail("no listener is attached to the components ActivitySource");
+        }
+
+        activity.DisplayName = displayName;
+        activity.Start();
+        activity.SetTag("error.type", errorType);
+        activity.SetStatus(ActivityStatusCode.Error);
+        activity.Stop();
+        return Session.Timeline.Snapshot().Last(e => e.Kind == DevToolsEventKind.UiEvent).Id;
+    }
+
     /// <summary>Mimics ComponentsActivitySource: display name set before the activity starts, tags only on stop.</summary>
     private static void Emit(string displayName)
     {

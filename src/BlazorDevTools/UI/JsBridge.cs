@@ -51,7 +51,7 @@ public sealed class BrowserSnapshot
 }
 
 /// <summary>Receives browser-side reports from devtools.js. One instance per DevTools panel (per session).</summary>
-public sealed class JsBridge(DevToolsSession session, Action toggle)
+public sealed class JsBridge(DevToolsSession session, Action toggle, Action? openPalette = null)
 {
     [JSInvokable]
     public void OnJsError(JsErrorPayload payload)
@@ -145,4 +145,7 @@ public sealed class JsBridge(DevToolsSession session, Action toggle)
 
     [JSInvokable]
     public void OnToggleShortcut() => toggle();
+
+    [JSInvokable]
+    public void OnPaletteShortcut() => openPalette?.Invoke();
 }

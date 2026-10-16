@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using BlazorDevTools.Events;
 using BlazorDevTools.Internal;
@@ -10,6 +11,7 @@ internal sealed partial class ErrorCenter
 {
     private readonly DevToolsSession _session;
     private readonly RingBuffer<ErrorRecord> _errors;
+    private readonly ConditionalWeakTable<Exception, ErrorRecord> _byException = new();
     private readonly object _lock = new();
     private long _nextId;
     private int _total;
@@ -34,6 +36,13 @@ internal sealed partial class ErrorCenter
         string? exceptionType = null,
         string? stackTrace = null)
     {
+        // One exception can reach DevTools through two capture paths: the render wrapper records it, then the
+        // ErrorBoundary or renderer that handles it logs it. That is one error, not two.
+        if (exception is not null && _byException.TryGetValue(exception, out var known))
+        {
+            return known;
+        }
+
         exceptionType ??= exception?.GetType().FullName ?? "Error";
         message ??= exception?.Message ?? "Unknown error";
         stackTrace ??= exception?.StackTrace;
@@ -50,6 +59,7 @@ internal sealed partial class ErrorCenter
             {
                 existing.Count++;
                 existing.LastSeen = now;
+                Remember(exception, existing);
                 RecordTimeline(existing, repeat: true);
                 _session.Touch();
                 return existing;
@@ -67,7 +77,7 @@ internal sealed partial class ErrorCenter
                 SourceLocation = location,
                 ComponentInstanceId = component?.InstanceId,
                 ComponentName = component?.DisplayName,
-                PrecedingEventId = precedingEventId ?? _session.CurrentTriggerEventId,
+                PrecedingEventId = precedingEventId ?? _session.CurrentTriggerEventId ?? (exception is null ? null : _session.TakeFailedTrigger(exceptionType)),
                 Fingerprint = fingerprint,
                 InnerError = Describe(exception?.InnerException),
             };
@@ -76,9 +86,18 @@ internal sealed partial class ErrorCenter
                 _total -= evicted.Count;
             }
 
+            Remember(exception, record);
             RecordTimeline(record, repeat: false);
             _session.Touch();
             return record;
+        }
+    }
+
+    private void Remember(Exception? exception, ErrorRecord record)
+    {
+        if (exception is not null)
+        {
+            _byException.AddOrUpdate(exception, record);
         }
     }
 
@@ -111,6 +130,7 @@ internal sealed partial class ErrorCenter
         lock (_lock)
         {
             _errors.Clear();
+            _byException.Clear();
             _total = 0;
         }
 

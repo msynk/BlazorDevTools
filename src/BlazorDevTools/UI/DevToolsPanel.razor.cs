@@ -108,7 +108,10 @@ public partial class DevToolsPanel : ComponentBase, IDevToolsCommandContext, IAs
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/BlazorDevTools/devtools.js");
             if (Options.EnableBrowserBridge)
             {
-                _bridgeRef = DotNetObjectReference.Create(new JsBridge(Session, () => InvokeAsync(() => { Toggle(); StateHasChanged(); })));
+                _bridgeRef = DotNetObjectReference.Create(new JsBridge(
+                    Session,
+                    () => InvokeAsync(() => { Toggle(); StateHasChanged(); }),
+                    () => InvokeAsync(() => { OpenPalette(); StateHasChanged(); })));
                 var snapshot = await _module.InvokeAsync<BrowserSnapshot>("attach", _bridgeRef, new { shortcut = Options.Ui.ToggleShortcut, trackJsToDotNet = Options.TrackJsInterop });
                 ApplySnapshot(snapshot);
                 Session.Browser.BridgeAttached = true;

@@ -5,7 +5,7 @@
     the tests use can never drift apart. Project files reference packages without a Version attribute.
   -->
   <PropertyGroup>
-    <AspNetCoreVersion>10.0.11</AspNetCoreVersion>
+    <AspNetCoreVersion>10.0.13</AspNetCoreVersion>
   </PropertyGroup>
 
   <ItemGroup Label="Framework">
