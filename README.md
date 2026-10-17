@@ -1,3 +1,5 @@
+**Note**: moved to bitplatform (https://bevtools.bitplatform.dev)
+
 # Blazor DevTools
 
 An in-app inspection and diagnostics tool for Blazor applications: a live component tree, a render profiler that
